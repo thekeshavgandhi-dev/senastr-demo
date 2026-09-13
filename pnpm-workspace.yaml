@@ -1,0 +1,8 @@
+packages:
+  - apps/*
+  - packages/*
+
+# pnpm defaults to `lowest-direct`, which makes a plain `pnpm update` resolve
+# every range to its floor. Pin the intent: `pnpm update` means "newest
+# within range".
+resolutionMode: highest

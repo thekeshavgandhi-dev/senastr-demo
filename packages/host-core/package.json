@@ -1,0 +1,23 @@
+{
+  "name": "@senastr/host-core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "senastr host core: local sidecar owning storage, tools, permissions, plugins. Speaks NDJSON JSON-RPC over stdio.",
+  "main": "dist/main.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "senastr-host-core": "dist/main.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@senastr/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "~5.9.3"
+  }
+}
