@@ -36,10 +36,10 @@ endpoint you configure.
 │                                                                 │
 │  ┌──────────────────────────────┐   ┌────────────────────────┐  │
 │  │ Renderer (React)             │   │ Main process           │  │
-│  │  • chat UI, composer         │   │  • window + lifecycle  │  │
-│  │  • permission dialog         │   │  • owns agent runtime  │  │
-│  │  • models, skills, MCP       │◄──┤  • narrow typed IPC    │  │
-│  │  • provider/plugin settings  │   │    surface             │  │
+│  │  • sidebar, topbar, search   │   │  • window + lifecycle  │  │
+│  │  • composer: modes, queue    │   │  • owns agent runtime  │  │
+│  │  • transcript, work panel    │◄──┤  • narrow typed IPC    │  │
+│  │  • settings, permission UI   │   │    surface             │  │
 │  │  • sandboxed; no secrets     │   └───────────┬────────────┘  │
 │  └──────────────────────────────┘               │               │
 └──────────────────────────────────────────────────┼───────────────┘
@@ -69,6 +69,7 @@ Key properties:
   demo and the tests all speak the same protocol.
 - **Storage ownership.** The host core is the only process that touches disk.
   The renderer sees only masked views (no API keys, ever).
+- **Desktop experience.** Project-grouped sessions with pin/archive/fork, Build/Plan agent modes, Ask/Accept-edits/Auto permission modes, a prompt queue, @file autocomplete, file attachments, a Review/Files/Details work panel, global search (Ctrl+K), keyboard shortcuts, and light/dark themes.
 - **Permission layer.** `read` tools run freely; `write`/`exec` tools need a
   grant or an interactive approval. Unanswered prompts are **denied after
   120s**. Grants are per tool per session (or "always") and revocable.

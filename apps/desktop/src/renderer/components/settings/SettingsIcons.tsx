@@ -20,7 +20,9 @@ export type SettingsIconName =
   | "x"
   | "folder"
   | "key"
-  | "chevron";
+  | "chevron"
+  | "sliders"
+  | "keyboard";
 
 export function SettingsIcon({ name, size = 16, ...props }: { name: SettingsIconName; size?: number } & SVGProps<SVGSVGElement>) {
   const common = {

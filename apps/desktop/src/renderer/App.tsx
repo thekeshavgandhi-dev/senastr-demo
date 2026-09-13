@@ -1,46 +1,128 @@
+import { useEffect } from "react";
 import { useSenastr } from "./hooks/useSenastr";
+import { resolveTheme } from "./lib/prefs";
+import { AskDialog } from "./components/AskDialog";
+import { PlanDialog } from "./components/PlanDialog";
 import { Sidebar } from "./components/Sidebar";
-import { ChatView } from "./components/ChatView";
+import { ConversationTopbar } from "./components/ConversationTopbar";
+import { ChatSurface } from "./components/ChatView";
 import { SettingsView } from "./components/SettingsView";
 import { PermissionDialog } from "./components/PermissionDialog";
+import { SearchDialog } from "./components/SearchDialog";
+import { ToastHost } from "./components/Toast";
+import { WorkPanel } from "./components/workpanel/WorkPanel";
 
 export default function App() {
   const s = useSenastr();
 
-  return (
-    <div className="app">
-      {s.view === "settings" ? (
-        <SettingsView store={s} />
-      ) : (
-        <>
-          <Sidebar
-            sessions={s.sessions}
-            activeId={s.activeSession?.id ?? null}
-            busy={s.busy}
-            version={s.version}
-            onNewSession={() => void s.newSession()}
-            onOpenProject={() => void s.openProject()}
-            onSelect={(id) => s.selectSession(id)}
-            onDelete={(id) => void s.deleteSession(id)}
-            onSettings={() => s.setView("settings")}
-            onChat={() => s.setView("chat")}
-            view={s.view}
-          />
-          <main className="main"><ChatView store={s} /></main>
-        </>
-      )}
+  // Apply theme + font scale to the document root.
+  useEffect(() => {
+    const apply = () => {
+      document.documentElement.dataset.theme = resolveTheme(s.theme);
+    };
+    apply();
+    const mq = window.matchMedia?.("(prefers-color-scheme: light)");
+    const onChange = () => s.theme === "system" && apply();
+    mq?.addEventListener?.("change", onChange);
+    return () => mq?.removeEventListener?.("change", onChange);
+  }, [s.theme]);
 
+  useEffect(() => {
+    document.documentElement.style.setProperty("--font-scale", String(s.fontScale));
+  }, [s.fontScale]);
+
+  // Global keyboard shortcuts.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const mod = e.ctrlKey || e.metaKey;
+      const typing = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target as HTMLElement)?.tagName ?? "");
+      if (mod && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        s.setSearchOpen(!s.searchOpen);
+      } else if (mod && e.key.toLowerCase() === "b") {
+        e.preventDefault();
+        s.setSidebarCollapsed(!s.sidebarCollapsed);
+      } else if (mod && e.key.toLowerCase() === "j") {
+        e.preventDefault();
+        s.setWorkPanelOpen(!s.workPanelOpen);
+      } else if (mod && e.key === ",") {
+        e.preventDefault();
+        s.setView(s.view === "settings" ? "chat" : "settings");
+      } else if (mod && e.shiftKey && e.key.toLowerCase() === "o") {
+        e.preventDefault();
+        if (s.view === "chat") void s.newSession(s.activeSession?.projectPath ?? undefined);
+      } else if (e.key === "Escape" && s.searchOpen) {
+        s.setSearchOpen(false);
+      } else if (typing) {
+        return;
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [s]);
+
+  // The `s` object identity changes every render; the keydown effect above
+  // re-subscribes — fine for a single global listener.
+
+  const activeAsk = s.pendingAsks.find((r) => r.sessionId === s.activeSession?.id) ?? s.pendingAsks[0] ?? null;
+
+  if (s.view === "settings") {
+    return (
+      <div className="app settings-mode">
+        <SettingsView store={s} />
+        <SearchDialog store={s} />
+        <ToastHost notices={s.notices} onDismiss={s.dismissNotice} />
+        {s.pendingPermission && (
+          <PermissionDialog
+            request={s.pendingPermission}
+            sessionTitle={s.activeSession?.title}
+            onDecide={(allow, remember) => s.respondPermission(allow, remember)}
+          />
+        )}
+        {activeAsk && (
+          <AskDialog
+            request={activeAsk}
+            sessionTitle={s.sessions.find((x) => x.id === activeAsk.sessionId)?.title}
+            onSubmit={(requestId, answers) => void s.resolveAsk(requestId, answers)}
+          />
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className={`app ${s.sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
+      {!s.sidebarCollapsed && <Sidebar store={s} />}
+      <main className="main-pane">
+        <ConversationTopbar store={s} />
+        <ChatSurface store={s} />
+      </main>
+      {s.workPanelOpen && <WorkPanel store={s} />}
+      <SearchDialog store={s} />
+      <ToastHost notices={s.notices} onDismiss={s.dismissNotice} />
       {s.pendingPermission && (
         <PermissionDialog
           request={s.pendingPermission}
+          sessionTitle={s.activeSession?.title}
           onDecide={(allow, remember) => s.respondPermission(allow, remember)}
         />
       )}
-
-      {s.notices.length > 0 && (
-        <div className="notices">
-          {s.notices.map((n) => <div key={n.id} className={`notice ${n.kind}`}>{n.text}</div>)}
-        </div>
+      {activeAsk && (
+        <AskDialog
+          request={activeAsk}
+          sessionTitle={s.activeSession?.title}
+          onSubmit={(requestId, answers) => void s.resolveAsk(requestId, answers)}
+        />
+      )}
+      {s.planProposal && (
+        <PlanDialog
+          proposal={s.planProposal}
+          sessionTitle={s.sessions.find((x) => x.id === s.planProposal?.sessionId)?.title}
+          busy={s.busy}
+          onApprove={() => void s.approvePlan()}
+          onReject={(feedback) => void s.rejectPlan(feedback)}
+          onDismiss={() => s.dismissPlan()}
+        />
       )}
     </div>
   );

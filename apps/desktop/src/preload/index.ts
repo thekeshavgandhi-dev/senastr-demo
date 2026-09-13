@@ -10,6 +10,7 @@ const api = {
   app: {
     version: () => invoke("app/version"),
     dataDir: () => invoke("app/data-dir"),
+    openExternal: (url: string) => invoke("app/open-external", { url }),
   },
   project: {
     open: () => invoke("project/open"),
@@ -21,6 +22,11 @@ const api = {
     rename: (id: string, title: string) => invoke("session/rename", { id, title }),
     delete: (id: string) => invoke("session/delete", { id }),
     setProject: (id: string, projectPath: string | null) => invoke("session/set-project", { id, projectPath }),
+    setMode: (id: string, mode: unknown) => invoke("session/set-mode", { id, mode }),
+    appendMessages: (id: string, messages: unknown[]) => invoke("session/append-messages", { id, messages }),
+  },
+  file: {
+    pick: (projectPath?: string | null) => invoke("file/pick", { projectPath }),
   },
   provider: {
     list: () => invoke("provider/list"),
@@ -52,13 +58,49 @@ const api = {
     list: () => invoke("plugin/list"),
     pickDirectory: () => invoke("plugin/pick-directory"),
     install: (dir: string) => invoke("plugin/install", { dir }),
+    installUrl: (url: string) => invoke("plugin/install-url", { url }),
     uninstall: (name: string) => invoke("plugin/uninstall", { name }),
     setEnabled: (name: string, enabled: boolean) => invoke("plugin/set-enabled", { name, enabled }),
   },
+  subagent: {
+    list: (query: unknown = {}) => invoke("subagent/list", query),
+    set: (subagent: unknown) => invoke("subagent/set", { subagent }),
+    delete: (params: unknown) => invoke("subagent/delete", params),
+    setEnabled: (params: unknown) => invoke("subagent/set-enabled", params),
+  },
+  scheduled: {
+    list: () => invoke("scheduled/list"),
+    set: (task: unknown) => invoke("scheduled/set", { task }),
+    delete: (id: string) => invoke("scheduled/delete", { id }),
+    setEnabled: (id: string, enabled: boolean) => invoke("scheduled/set-enabled", { id, enabled }),
+    runs: (params: unknown = {}) => invoke("scheduled/runs", params),
+    trigger: (id: string) => invoke("scheduled/trigger", { id }),
+  },
+  review: {
+    list: (sessionId: string) => invoke("review/list", { sessionId }),
+    get: (params: unknown) => invoke("review/get", params),
+    rollback: (params: unknown) => invoke("review/rollback", params),
+    purge: (sessionId: string) => invoke("review/purge", { sessionId }),
+  },
+  projectCtx: {
+    getContext: (projectPath?: string | null) => invoke("project/get-context", { projectPath }),
+    setContext: (params: unknown) => invoke("project/set-context", params),
+    gitInfo: (projectPath: string) => invoke("project/git-info", { projectPath }),
+    prList: (projectPath: string, limit?: number) => invoke("project/pr-list", { projectPath, limit }),
+  },
+  notify: {
+    list: () => invoke("notify/list"),
+    markRead: (params: { id?: string; all?: boolean }) => invoke("notify/mark-read", params),
+    clear: () => invoke("notify/clear"),
+  },
   chat: {
-    send: (params: { sessionId: string; text: string; modelRef: { providerId: string; model: string } }) =>
+    send: (params: { sessionId: string; text: string; modelRef: { providerId: string; model: string }; mode?: unknown }) =>
       invoke("chat/send", params),
     stop: (sessionId: string) => invoke("chat/stop", { sessionId }),
+    resolveAsk: (requestId: string, answers: unknown) => invoke("chat/resolve-ask", { requestId, answers }),
+    delegations: (sessionId: string) => invoke("chat/delegations", { sessionId }),
+    enhance: (params: unknown) => invoke("chat/enhance", params),
+    suggestTitle: (params: unknown) => invoke("chat/suggest-title", params),
   },
   /**
    * Subscribe to live events (agent turn events + permission requests).

@@ -97,6 +97,7 @@ export const Methods = {
   sessionCreate: "session/create",
   sessionGet: "session/get",
   sessionRename: "session/rename",
+  sessionSetMode: "session/set-mode",
   sessionSetProject: "session/set-project",
   sessionDelete: "session/delete",
   sessionAppendMessages: "session/append-messages",
@@ -125,6 +126,27 @@ export const Methods = {
   permissionRespond: "permission/respond",
   permissionList: "permission/list",
   permissionClear: "permission/clear",
+
+  subagentList: "subagent/list",
+  subagentActive: "subagent/active",
+  subagentSet: "subagent/set",
+  subagentDelete: "subagent/delete",
+  subagentSetEnabled: "subagent/set-enabled",
+
+  scheduledList: "scheduled/list",
+  scheduledSet: "scheduled/set",
+  scheduledDelete: "scheduled/delete",
+  scheduledSetEnabled: "scheduled/set-enabled",
+  scheduledRuns: "scheduled/runs",
+  scheduledRecordRun: "scheduled/record-run",
+
+  reviewList: "review/list",
+  reviewGet: "review/get",
+  reviewRollback: "review/rollback",
+  reviewPurge: "review/purge",
+
+  projectGetContext: "project/get-context",
+  projectSetContext: "project/set-context",
 
   pluginList: "plugin/list",
   pluginInstall: "plugin/install",

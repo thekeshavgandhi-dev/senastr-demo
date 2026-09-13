@@ -1,11 +1,15 @@
+import { execFile } from "node:child_process";
 import {
   cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
   builtinToolNames,
@@ -117,6 +121,65 @@ export class PluginService {
     };
   }
 
+  /** Clone a git repository and install the plugin it contains. The same
+   *  manifest validation as local installs applies. Only well-known public
+   *  git hosts are accepted (use local-folder install for anything else). */
+  async installFromUrl(url: string): Promise<PluginInfo> {
+    const cleaned = url.trim();
+    const host = pluginUrlHost(cleaned);
+    if (!host) {
+      throw new RpcError(
+        ErrorCodes.INVALID_PARAMS,
+        "plugin URL must be https://, ssh:// or git@ form",
+      );
+    }
+    if (!ALLOWED_PLUGIN_HOSTS.has(host)) {
+      throw new RpcError(
+        ErrorCodes.INVALID_PARAMS,
+        `plugin host not allowed: ${host} (allowed: ${[...ALLOWED_PLUGIN_HOSTS].join(", ")})`,
+      );
+    }
+    const workdir = mkdtempSync(join(tmpdir(), "senastr-plugin-"));
+    try {
+      await execFileAsync("git", ["clone", "--depth", "1", cleaned, workdir + "-repo"]);
+    } catch (err) {
+      rmSync(workdir, { recursive: true, force: true });
+      const message = err instanceof Error ? err.message : String(err);
+      if (/ENOENT|not found/i.test(message)) {
+        throw new RpcError(ErrorCodes.PLUGIN_INVALID, "git is not installed — cannot install from URL");
+      }
+      throw new RpcError(ErrorCodes.PLUGIN_INVALID, `git clone failed: ${message.slice(0, 300)}`);
+    }
+    // The manifest may live at the repo root or one level down.
+    const repo = workdir + "-repo";
+    let nested = "";
+    try {
+      nested = readdirSync(repo).find((entry) => entry !== ".git") ?? "";
+    } catch {
+      nested = "";
+    }
+    const candidates = nested ? [repo, join(repo, nested)] : [repo];
+    let installed: PluginInfo | null = null;
+    let lastError: unknown = null;
+    for (const candidate of candidates) {
+      try {
+        if (existsSync(join(candidate, MANIFEST_FILE))) {
+          installed = this.installFromDir(candidate);
+          break;
+        }
+      } catch (err) {
+        lastError = err;
+      }
+    }
+    rmSync(repo, { recursive: true, force: true });
+    rmSync(workdir, { recursive: true, force: true });
+    if (!installed) {
+      if (lastError instanceof RpcError) throw lastError;
+      throw new RpcError(ErrorCodes.PLUGIN_INVALID, `no ${MANIFEST_FILE} found in ${cleaned}`);
+    }
+    return installed;
+  }
+
   setEnabled(name: string, enabled: boolean): PluginInfo {
     const meta = this.installed.get()[name];
     if (!meta) throw new RpcError(ErrorCodes.PLUGIN_INVALID, `plugin not installed: ${name}`);
@@ -175,5 +238,41 @@ export function validateManifest(m: PluginManifest): void {
     if (typeof tool.command !== "string" || !tool.command.trim()) {
       invalid(`tool ${tool.name} needs a command`);
     }
+  }
+}
+
+function execFileAsync(file: string, args: string[]): Promise<void> {
+  return new Promise((resolvePromise, reject) => {
+    execFile(file, args, { timeout: 120_000 }, (error) => {
+      if (error) reject(error);
+      else resolvePromise();
+    });
+  });
+}
+
+/** Public git hosts accepted for URL installs. */
+const ALLOWED_PLUGIN_HOSTS = new Set([
+  "github.com",
+  "www.github.com",
+  "gitlab.com",
+  "www.gitlab.com",
+  "bitbucket.org",
+  "www.bitbucket.org",
+  "git.sr.ht",
+]);
+
+/** Extract the hostname from an https/ssh/git@ URL, or null when malformed. */
+function pluginUrlHost(cleaned: string): string | null {
+  if (cleaned.startsWith("git@")) {
+    const rest = cleaned.slice("git@".length);
+    const end = rest.search(/[:/]/);
+    if (end <= 0) return null;
+    return rest.slice(0, end).toLowerCase() || null;
+  }
+  if (!/^(https:\/\/|ssh:\/\/)/.test(cleaned)) return null;
+  try {
+    return new URL(cleaned).hostname.toLowerCase() || null;
+  } catch {
+    return null;
   }
 }

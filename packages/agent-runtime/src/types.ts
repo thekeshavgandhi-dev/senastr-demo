@@ -1,9 +1,12 @@
 import type {
   ChatMessage,
+  ModelRef,
+  ProjectContext,
   ProviderApiStyle,
   ProviderKind,
   Session,
   SkillRecord,
+  SubagentRecord,
   ToolCall,
   ToolDefinition,
   ToolResult,
@@ -60,6 +63,12 @@ export interface HostBridge {
   listTools(sessionId?: string): Promise<ToolDefinition[]>;
   /** Optional for lightweight/test hosts. Desktop host-core implements it. */
   listSkills?(projectPath?: string | null): Promise<SkillRecord[]>;
+  /** Enabled subagent definitions visible to the Task tool. */
+  listSubagents?(projectPath?: string | null): Promise<SubagentRecord[]>;
+  /** Standing instructions + memory. Null projectPath = global layer. */
+  getProjectContext?(projectPath: string | null): Promise<ProjectContext>;
+  /** Resolve a model reference to a runnable spec (API keys included). */
+  resolveModel?(ref: ModelRef): Promise<ModelSpec>;
   runTool(req: { sessionId: string; tool: string; args: Record<string, unknown> }): Promise<ToolResult>;
 }
 

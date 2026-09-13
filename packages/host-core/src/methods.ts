@@ -7,10 +7,15 @@ import {
   SENASTR_VERSION,
   type GrantScope,
   type McpServerInput,
+  type ProjectContext,
   type ProviderConfig,
   type ProviderDiscoveryInput,
+  type ScheduledRun,
+  type ScheduledTaskInput,
   type Session,
+  type SessionMode,
   type SkillInput,
+  type SubagentInput,
 } from "@senastr/shared";
 import type { RpcServer } from "./server";
 import type { SessionStore } from "./sessions";
@@ -20,6 +25,10 @@ import type { ToolRunner } from "./tools/runner";
 import type { PluginService } from "./plugins";
 import type { SkillService } from "./skills";
 import type { McpService } from "./mcp";
+import type { SubagentService } from "./subagents";
+import type { ScheduledService } from "./scheduled";
+import type { ReviewStore } from "./review";
+import type { InstructionService } from "./instructions";
 
 export interface MethodContext {
   server: RpcServer;
@@ -31,6 +40,10 @@ export interface MethodContext {
   plugins: PluginService;
   skills: SkillService;
   mcp: McpService;
+  subagents: SubagentService;
+  scheduled: ScheduledService;
+  review: ReviewStore;
+  instructions: InstructionService;
 }
 
 /**
@@ -39,7 +52,7 @@ export interface MethodContext {
  * matter who is on the other end (desktop, demo script, tests).
  */
 export function registerMethods(ctx: MethodContext): void {
-  const { server, sessions, providers, permissions, tools, plugins, skills, mcp } = ctx;
+  const { server, sessions, providers, permissions, tools, plugins, skills, mcp, subagents, scheduled, review, instructions } = ctx;
 
   // --- host -----------------------------------------------------------------
   server.onMethod(Methods.hostPing, () => ({
@@ -78,9 +91,15 @@ export function registerMethods(ctx: MethodContext): void {
     return sessions.setProject(id, projectPath);
   });
 
+  server.onMethod(Methods.sessionSetMode, (params: { id: string; mode: SessionMode }): Session => {
+    const id = requireString(params, "id");
+    return sessions.setMode(id, params.mode);
+  });
+
   server.onMethod(Methods.sessionDelete, (params: { id: string }) => {
     const id = requireString(params, "id");
     sessions.delete(id);
+    review.purge(id);
     return { ok: true };
   });
 
@@ -213,7 +232,10 @@ export function registerMethods(ctx: MethodContext): void {
   // --- plugins -----------------------------------------------------------------
   server.onMethod(Methods.pluginList, () => plugins.list());
 
-  server.onMethod(Methods.pluginInstall, (params: { dir: string }) => {
+  server.onMethod(Methods.pluginInstall, (params: { dir?: string; url?: string }) => {
+    if (typeof params?.url === "string" && params.url.trim()) {
+      return plugins.installFromUrl(params.url);
+    }
     const dir = requireString(params, "dir");
     return plugins.installFromDir(dir);
   });
@@ -228,6 +250,100 @@ export function registerMethods(ctx: MethodContext): void {
     const name = requireString(params, "name");
     return plugins.setEnabled(name, Boolean(params.enabled));
   });
+
+  // --- subagents ---------------------------------------------------------------
+  server.onMethod(Methods.subagentList, (params?: { level?: "global" | "project"; projectPath?: string }) =>
+    subagents.list(params ?? {}),
+  );
+  server.onMethod(Methods.subagentActive, (params?: { projectPath?: string | null }) =>
+    subagents.active(params?.projectPath),
+  );
+  server.onMethod(Methods.subagentSet, (params: { subagent: SubagentInput }) => {
+    if (!params?.subagent) throw new RpcError(ErrorCodes.INVALID_PARAMS, "subagent is required");
+    return subagents.set(params.subagent);
+  });
+  server.onMethod(
+    Methods.subagentSetEnabled,
+    (params: { id: string; enabled: boolean; level?: "global" | "project"; projectPath?: string }) => {
+      const id = requireString(params, "id");
+      return subagents.setEnabled(id, Boolean(params.enabled), params);
+    },
+  );
+  server.onMethod(
+    Methods.subagentDelete,
+    (params: { id: string; level?: "global" | "project"; projectPath?: string }) => {
+      const id = requireString(params, "id");
+      subagents.delete(id, params);
+      return { ok: true };
+    },
+  );
+
+  // --- scheduled tasks -----------------------------------------------------------
+  server.onMethod(Methods.scheduledList, () => scheduled.list());
+  server.onMethod(Methods.scheduledSet, (params: { task: ScheduledTaskInput }) => {
+    if (!params?.task) throw new RpcError(ErrorCodes.INVALID_PARAMS, "task is required");
+    return scheduled.set(params.task);
+  });
+  server.onMethod(Methods.scheduledDelete, (params: { id: string }) => {
+    const id = requireString(params, "id");
+    scheduled.delete(id);
+    return { ok: true };
+  });
+  server.onMethod(Methods.scheduledSetEnabled, (params: { id: string; enabled: boolean }) => {
+    const id = requireString(params, "id");
+    return scheduled.setEnabled(id, Boolean(params.enabled));
+  });
+  server.onMethod(Methods.scheduledRuns, (params: { taskId: string }) => {
+    const taskId = requireString(params, "taskId");
+    return scheduled.runsFor(taskId);
+  });
+  server.onMethod(Methods.scheduledRecordRun, (params: { run: ScheduledRun; claim?: { taskId: string; sessionId: string } }) => {
+    if (params?.claim) {
+      const { taskId, sessionId } = params.claim;
+      if (typeof taskId === "string" && typeof sessionId === "string") return scheduled.claim(taskId, sessionId);
+    }
+    if (!params?.run) throw new RpcError(ErrorCodes.INVALID_PARAMS, "run is required");
+    return scheduled.recordRun(params.run);
+  });
+
+  // --- review snapshots ------------------------------------------------------------
+  server.onMethod(Methods.reviewList, (params: { sessionId: string }) => {
+    const sessionId = requireString(params, "sessionId");
+    return review.list(sessionId);
+  });
+  server.onMethod(Methods.reviewGet, (params: { sessionId: string; snapshotId: string }) => {
+    const sessionId = requireString(params, "sessionId");
+    const snapshotId = requireString(params, "snapshotId");
+    return review.get(sessionId, snapshotId);
+  });
+  server.onMethod(Methods.reviewPurge, (params: { sessionId: string }) => {
+    const sessionId = requireString(params, "sessionId");
+    review.purge(sessionId);
+    return { ok: true };
+  });
+  server.onMethod(Methods.reviewRollback, (params: { sessionId: string; snapshotId: string }) => {
+    const sessionId = requireString(params, "sessionId");
+    const snapshotId = requireString(params, "snapshotId");
+    const snapshot = review.get(sessionId, snapshotId);
+    if (snapshot.truncated) {
+      throw new RpcError(ErrorCodes.HOST_ERROR, "snapshot is truncated — rollback is unsafe");
+    }
+    const output = tools.rollbackFile(sessionId, snapshot.path, snapshot.before);
+    return { ok: true, output };
+  });
+
+  // --- project instructions ----------------------------------------------------------
+  server.onMethod(Methods.projectGetContext, (params?: { projectPath?: string | null }): ProjectContext => {
+    const projectPath = typeof params?.projectPath === "string" ? params.projectPath : null;
+    return instructions.get(projectPath);
+  });
+  server.onMethod(
+    Methods.projectSetContext,
+    (params: { projectPath?: string | null; instructions?: string; memory?: string }): ProjectContext => {
+      const projectPath = typeof params?.projectPath === "string" ? params.projectPath : null;
+      return instructions.set(projectPath, params?.instructions ?? "", params?.memory ?? "");
+    },
+  );
 }
 
 function requireString(params: unknown, field: string): string {

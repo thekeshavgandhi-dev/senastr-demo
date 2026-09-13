@@ -23,6 +23,9 @@ export interface SessionMeta {
   /** Absolute path of the local project this session works on. Null until
    *  the user opens one. */
   projectPath: string | null;
+  /** Durable operating mode. Plan mode is read-only until a submitted plan
+   *  is approved. Defaults to "build" for sessions created before modes. */
+  mode: SessionMode;
   createdAt: number;
   updatedAt: number;
   messageCount: number;
@@ -286,7 +289,7 @@ export interface Usage {
   outputTokens?: number;
 }
 
-export type TurnStopReason = "stop" | "max-steps" | "aborted" | "error";
+export type TurnStopReason = "stop" | "max-steps" | "aborted" | "error" | "plan";
 
 /** Events the agent runtime emits while a turn is running. Forwarded
  *  verbatim from main to the renderer as `senastr/event`. */
@@ -295,10 +298,224 @@ export type AgentEvent =
   | { type: "assistant/delta"; delta: string }
   | { type: "tool/call"; call: ToolCall }
   | { type: "tool/result"; callId: string; ok: boolean; result: ToolResult }
-  | { type: "turn/end"; stopReason: TurnStopReason; usage: Usage; error?: string };
+  | { type: "turn/end"; stopReason: TurnStopReason; usage: Usage; error?: string }
+  | { type: "ask/request"; request: AskRequest }
+  | { type: "ask/resolved"; requestId: string; sessionId: string }
+  | { type: "plan/proposed"; sessionId: string; proposal: PlanProposal }
+  | { type: "plan/resolved"; sessionId: string; decision: "approved" | "rejected" }
+  | { type: "subagent/start"; sessionId: string; delegation: DelegationSummary }
+  | { type: "subagent/end"; sessionId: string; delegation: DelegationSummary };
 
 /** How the UI references the model for a turn. */
 export interface ModelRef {
   providerId: string;
   model: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* Ask-user tool                                                       */
+/* ------------------------------------------------------------------ */
+
+/** One question inside an ask_user tool call. */
+export interface AskQuestion {
+  id: string;
+  /** Short label shown above the question. */
+  header?: string;
+  question: string;
+  /** Suggested options. Empty/omitted = free-text answer. */
+  options?: string[];
+  multiSelect?: boolean;
+}
+
+/** A paused turn waiting for the user to answer. */
+export interface AskRequest {
+  requestId: string;
+  sessionId: string;
+  toolCallId: string;
+  questions: AskQuestion[];
+  createdAt: number;
+}
+
+/** Answers mirror questions by position: selected option strings (possibly
+ * empty) or null when the question was skipped. */
+export type AskAnswers = Array<string[] | null>;
+
+/* ------------------------------------------------------------------ */
+/* Plan mode                                                           */
+/* ------------------------------------------------------------------ */
+
+export type SessionMode = "build" | "plan";
+
+/** Structured plan submitted via the submit_plan tool while in plan mode. */
+export interface PlanProposal {
+  sessionId: string;
+  toolCallId: string;
+  summary: string;
+  steps: string[];
+  risks?: string;
+  createdAt: number;
+}
+
+/* ------------------------------------------------------------------ */
+/* Subagents                                                           */
+/* ------------------------------------------------------------------ */
+
+/** A named delegate personality the model can spawn via the Task tool. */
+export interface SubagentRecord {
+  id: string;
+  name: string;
+  description?: string;
+  /** Extra system-prompt block for delegated runs. */
+  systemPrompt: string;
+  model?: ModelRef | null;
+  enabled: boolean;
+  level: CapabilityLevel;
+  projectPath?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface SubagentInput {
+  id?: string;
+  name: string;
+  description?: string;
+  systemPrompt: string;
+  model?: ModelRef | null;
+  enabled?: boolean;
+  level?: CapabilityLevel;
+  projectPath?: string;
+}
+
+export type DelegationStatus = "running" | "done" | "error" | "stopped";
+
+/** One Task-tool delegation owned by a session. */
+export interface DelegationSummary {
+  id: string;
+  sessionId: string;
+  agentName: string;
+  description: string;
+  status: DelegationStatus;
+  startedAt: number;
+  completedAt?: number;
+  turns?: number;
+  /** Final report (present once settled; truncated for transport). */
+  report?: string;
+  usage?: Usage;
+  error?: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* Scheduled tasks                                                     */
+/* ------------------------------------------------------------------ */
+
+export type ScheduleCadence = "manual" | "hourly" | "daily" | "weekly" | "cron";
+export type ScheduledRunStatus = "running" | "done" | "error";
+
+export interface ScheduledTask {
+  id: string;
+  title: string;
+  prompt: string;
+  projectPath: string;
+  providerId: string;
+  model: string;
+  cadence: ScheduleCadence;
+  /** 5-field cron expression when cadence is "cron". */
+  cron?: string;
+  enabled: boolean;
+  /** Headless session the task runs in (created on first run). */
+  sessionId?: string;
+  createdAt: number;
+  updatedAt: number;
+  lastRunAt?: number;
+  nextRunAt?: number;
+  lastStatus?: ScheduledRunStatus;
+}
+
+export interface ScheduledTaskInput {
+  id?: string;
+  title: string;
+  prompt: string;
+  projectPath: string;
+  providerId: string;
+  model: string;
+  cadence?: ScheduleCadence;
+  cron?: string;
+  enabled?: boolean;
+}
+
+export interface ScheduledRun {
+  id: string;
+  taskId: string;
+  sessionId?: string;
+  status: ScheduledRunStatus;
+  startedAt: number;
+  endedAt?: number;
+  summary?: string;
+  error?: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* Review snapshots                                                    */
+/* ------------------------------------------------------------------ */
+
+/** Before/after image of one agent file write, for review + rollback. */
+export interface ReviewSnapshot {
+  id: string;
+  sessionId: string;
+  /** Path relative to the project root. */
+  path: string;
+  /** Previous content; null when the file is new. */
+  before: string | null;
+  after: string;
+  truncated: boolean;
+  createdAt: number;
+}
+
+/* ------------------------------------------------------------------ */
+/* Project instructions + memory                                       */
+/* ------------------------------------------------------------------ */
+
+export interface ProjectContext {
+  /** Null = global instructions shared by every project. */
+  projectPath: string | null;
+  instructions: string;
+  memory: string;
+  updatedAt: number;
+}
+
+/* ------------------------------------------------------------------ */
+/* Git + pull requests                                                 */
+/* ------------------------------------------------------------------ */
+
+export interface GitInfo {
+  branch: string | null;
+  /** Number of changed paths in `git status --porcelain`. */
+  dirty: number;
+  error?: string;
+}
+
+export interface PullSummary {
+  number: number;
+  title: string;
+  url: string;
+  author?: string;
+  headRefName?: string;
+  baseRefName?: string;
+  updatedAt?: string;
+  isDraft: boolean;
+}
+
+/* ------------------------------------------------------------------ */
+/* Notifications                                                       */
+/* ------------------------------------------------------------------ */
+
+export interface AppNotification {
+  id: string;
+  title: string;
+  body?: string;
+  kind: "info" | "success" | "error" | "ask" | "plan" | "scheduled";
+  sessionId?: string;
+  taskId?: string;
+  createdAt: number;
+  read: boolean;
 }
