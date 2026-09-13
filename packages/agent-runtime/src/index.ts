@@ -1,4 +1,17 @@
-export { AgentRuntime, withActiveSkills, type TurnParams } from "./agent";
+export {
+  AgentRuntime,
+  withActiveSkills,
+  withProjectContext,
+  PLAN_MODE_PROMPT,
+  type TurnParams,
+} from "./agent";
+export {
+  completeOneShot,
+  PROMPT_ENHANCEMENT_SYSTEM,
+  TITLE_SUMMARIZE_SYSTEM,
+  type OneShotParams,
+  type OneShotResult,
+} from "./one-shot";
 export { createProvider } from "./providers/factory";
 export { OpenAICompatibleProvider, parseToolArgs } from "./providers/openai";
 export { AnthropicProvider } from "./providers/anthropic";

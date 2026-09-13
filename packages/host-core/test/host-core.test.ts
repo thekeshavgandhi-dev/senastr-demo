@@ -15,13 +15,17 @@ import {
   type ToolResult,
 } from "@senastr/shared";
 import {
+  InstructionService,
   McpService,
   PermissionService,
   PluginService,
   ProviderStore,
+  ReviewStore,
   RpcServer,
+  ScheduledService,
   SessionStore,
   SkillService,
+  SubagentService,
   ToolRunner,
   registerMethods,
   safeJoin,
@@ -64,8 +68,26 @@ function makeHarness(permTimeoutMs = 120_000): Harness {
   const plugins = new PluginService(dataDir);
   const skills = new SkillService(dataDir);
   const mcp = new McpService(dataDir);
-  const tools = new ToolRunner(sessions, permissions, plugins, mcp);
-  registerMethods({ server, dataDir, sessions, providers, permissions, tools, plugins, skills, mcp });
+  const subagents = new SubagentService(dataDir);
+  const scheduled = new ScheduledService(dataDir);
+  const review = new ReviewStore(join(dataDir, "review"));
+  const instructions = new InstructionService(dataDir);
+  const tools = new ToolRunner(sessions, permissions, plugins, mcp, review);
+  registerMethods({
+    server,
+    dataDir,
+    sessions,
+    providers,
+    permissions,
+    tools,
+    plugins,
+    skills,
+    mcp,
+    subagents,
+    scheduled,
+    review,
+    instructions,
+  });
 
   const notifications: Array<{ method: string; params: unknown }> = [];
   let buffer = "";

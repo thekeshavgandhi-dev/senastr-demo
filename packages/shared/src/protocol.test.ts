@@ -24,9 +24,12 @@ describe("tool catalog", () => {
 
   it("exposes the expected builtin set", () => {
     expect([...builtinToolNames()].sort()).toEqual([
+      "Task",
+      "ask_user",
       "list_dir",
       "read_file",
       "run_command",
+      "submit_plan",
       "write_file",
     ]);
   });

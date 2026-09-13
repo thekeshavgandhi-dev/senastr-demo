@@ -1,9 +1,11 @@
+import { readFileSync } from "node:fs";
 import { BUILTIN_TOOLS, ErrorCodes, RpcError, type ToolDefinition, type ToolResult } from "@senastr/shared";
 import type { PermissionService } from "../permissions";
 import type { SessionStore } from "../sessions";
 import type { PluginService } from "../plugins";
 import type { McpService } from "../mcp";
-import { listDirTool, readFileTool, resolveProjectPath, writeFileTool } from "./fs";
+import type { ReviewStore } from "../review";
+import { deleteFileTool, listDirTool, readFileTool, resolveProjectPath, safeJoin, writeFileTool } from "./fs";
 import { runShell } from "./shell";
 
 export interface ToolRunParams {
@@ -24,6 +26,7 @@ export class ToolRunner {
     private readonly permissions: PermissionService,
     private readonly plugins: PluginService,
     private readonly mcp?: McpService,
+    private readonly review?: ReviewStore,
   ) {}
 
   async listTools(sessionId?: string): Promise<ToolDefinition[]> {
@@ -79,7 +82,21 @@ export class ToolRunner {
         }
       }
 
+      // Snapshot the previous content before a write so Review can show
+      // a diff and roll back afterwards.
+      const snapshotBefore =
+        params.tool === "write_file" && typeof params.args.path === "string"
+          ? readExistingFile(project, params.args.path)
+          : undefined;
       const output = await this.execute(tool, project, params.args);
+      if (params.tool === "write_file" && typeof params.args.path === "string") {
+        this.review?.append(
+          session.id,
+          params.args.path,
+          snapshotBefore ?? null,
+          typeof params.args.content === "string" ? params.args.content : "",
+        );
+      }
       return finish(true, { output });
     } catch (err) {
       const message = err instanceof RpcError ? err.message : err instanceof Error ? err.message : String(err);
@@ -116,6 +133,20 @@ export class ToolRunner {
     }
   }
 
+  /** Direct write for user-initiated rollback. No permission prompt: the
+   *  user explicitly clicked rollback in the UI (like any other direct
+   *  user action it needs no grant). */
+  rollbackFile(sessionId: string, path: string, content: string | null): string {
+    const session = this.sessions.get(sessionId);
+    const project = resolveProjectPath(session.projectPath);
+    const target = safeJoin(project, path);
+    if (content === null) {
+      // The file is new in this session — rollback deletes it.
+      return deleteFileTool(project, { path });
+    }
+    return writeFileTool(project, { path, content });
+  }
+
   private summarize(tool: ToolDefinition, args: Record<string, unknown>): string {
     if (tool.source === "mcp") return `${tool.description} → ${JSON.stringify(args).slice(0, 100)}`;
     const path = typeof args.path === "string" ? args.path : undefined;
@@ -125,6 +156,17 @@ export class ToolRunner {
     if (command) return `${tool.name} → ${command.slice(0, 120)}`;
     if (content !== undefined) return `${tool.name} → ${content.length} characters`;
     return `${tool.name} ${JSON.stringify(args).slice(0, 120)}`;
+  }
+}
+
+/** Best-effort read of the current file content. Returns undefined when
+ *  the file does not exist or cannot be read (treated as a new file). */
+function readExistingFile(project: string, rel: string): string | undefined {
+  try {
+    const target = safeJoin(project, rel);
+    return readFileSync(target, "utf8");
+  } catch {
+    return undefined;
   }
 }
 

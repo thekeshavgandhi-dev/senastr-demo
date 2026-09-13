@@ -60,6 +60,79 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
     source: "builtin",
   },
   {
+    name: "ask_user",
+    description:
+      "Ask the user one or more questions and wait for their answers. Use this when you are blocked on a decision only the user can make (scope, approach, credentials, destructive actions). Keep questions short and offer options whenever possible.",
+    parameters: {
+      type: "object",
+      properties: {
+        questions: {
+          type: "array",
+          description: "1-4 questions for the user.",
+          items: {
+            type: "object",
+            properties: {
+              question: { type: "string", description: "The question text." },
+              header: { type: "string", description: "Short label shown above the question." },
+              options: {
+                type: "array",
+                description: "Suggested answers. Omit for free-text.",
+                items: { type: "string" },
+              },
+              multiSelect: { type: "boolean", description: "Allow picking several options." },
+            },
+            required: ["question"],
+          },
+        },
+      },
+      required: ["questions"],
+    },
+    risk: "read",
+    source: "builtin",
+  },
+  {
+    name: "submit_plan",
+    description:
+      "Submit a step-by-step plan for the user's approval. Only available in plan mode: investigate with read-only tools first, then call this once with the full plan. The turn pauses until the user approves, rejects, or asks for revisions.",
+    parameters: {
+      type: "object",
+      properties: {
+        summary: { type: "string", description: "One-paragraph summary of the proposed change." },
+        steps: {
+          type: "array",
+          description: "Ordered implementation steps.",
+          items: { type: "string" },
+        },
+        risks: { type: "string", description: "Risks, open questions, or things you will not touch." },
+      },
+      required: ["summary", "steps"],
+    },
+    risk: "read",
+    source: "builtin",
+  },
+  {
+    name: "Task",
+    description:
+      "Spawn a subagent to handle a self-contained piece of work in the background (exploration, research, drafting). Give a precise prompt with the files and context it needs; it returns a report. It cannot ask the user questions or spawn further subagents.",
+    parameters: {
+      type: "object",
+      properties: {
+        description: { type: "string", description: "Short (3-5 word) description of the delegated work." },
+        prompt: {
+          type: "string",
+          description: "Full self-contained instructions for the subagent, including relevant file paths and what to report back.",
+        },
+        subagent: {
+          type: "string",
+          description: "Optional name of a configured subagent personality. Omit for the default agent.",
+        },
+      },
+      required: ["description", "prompt"],
+    },
+    risk: "exec",
+    source: "builtin",
+  },
+  {
     name: "run_command",
     description:
       "Run a shell command in the project directory. Returns combined stdout, stderr and the exit code.",

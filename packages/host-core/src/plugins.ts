@@ -1,11 +1,15 @@
+import { execFile } from "node:child_process";
 import {
   cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
   builtinToolNames,
@@ -117,6 +121,54 @@ export class PluginService {
     };
   }
 
+  /** Clone a git repository and install the plugin it contains. The same
+   *  manifest validation as local installs applies. */
+  async installFromUrl(url: string): Promise<PluginInfo> {
+    const cleaned = url.trim();
+    if (!/^(https?:\/\/|git@|ssh:\/\/|file:\/\/)/.test(cleaned)) {
+      throw new RpcError(ErrorCodes.INVALID_PARAMS, "plugin URL must be http(s), ssh, git@ or file://");
+    }
+    const workdir = mkdtempSync(join(tmpdir(), "senastr-plugin-"));
+    try {
+      await execFileAsync("git", ["clone", "--depth", "1", cleaned, workdir + "-repo"]);
+    } catch (err) {
+      rmSync(workdir, { recursive: true, force: true });
+      const message = err instanceof Error ? err.message : String(err);
+      if (/ENOENT|not found/i.test(message)) {
+        throw new RpcError(ErrorCodes.PLUGIN_INVALID, "git is not installed — cannot install from URL");
+      }
+      throw new RpcError(ErrorCodes.PLUGIN_INVALID, `git clone failed: ${message.slice(0, 300)}`);
+    }
+    // The manifest may live at the repo root or one level down.
+    const repo = workdir + "-repo";
+    let nested = "";
+    try {
+      nested = readdirSync(repo).find((entry) => entry !== ".git") ?? "";
+    } catch {
+      nested = "";
+    }
+    const candidates = nested ? [repo, join(repo, nested)] : [repo];
+    let installed: PluginInfo | null = null;
+    let lastError: unknown = null;
+    for (const candidate of candidates) {
+      try {
+        if (existsSync(join(candidate, MANIFEST_FILE))) {
+          installed = this.installFromDir(candidate);
+          break;
+        }
+      } catch (err) {
+        lastError = err;
+      }
+    }
+    rmSync(repo, { recursive: true, force: true });
+    rmSync(workdir, { recursive: true, force: true });
+    if (!installed) {
+      if (lastError instanceof RpcError) throw lastError;
+      throw new RpcError(ErrorCodes.PLUGIN_INVALID, `no ${MANIFEST_FILE} found in ${cleaned}`);
+    }
+    return installed;
+  }
+
   setEnabled(name: string, enabled: boolean): PluginInfo {
     const meta = this.installed.get()[name];
     if (!meta) throw new RpcError(ErrorCodes.PLUGIN_INVALID, `plugin not installed: ${name}`);
@@ -176,4 +228,13 @@ export function validateManifest(m: PluginManifest): void {
       invalid(`tool ${tool.name} needs a command`);
     }
   }
+}
+
+function execFileAsync(file: string, args: string[]): Promise<void> {
+  return new Promise((resolvePromise, reject) => {
+    execFile(file, args, { timeout: 120_000 }, (error) => {
+      if (error) reject(error);
+      else resolvePromise();
+    });
+  });
 }

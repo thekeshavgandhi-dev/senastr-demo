@@ -11,6 +11,10 @@ import { ToolRunner } from "./tools/runner";
 import { PluginService } from "./plugins";
 import { SkillService } from "./skills";
 import { McpService } from "./mcp";
+import { SubagentService } from "./subagents";
+import { ScheduledService } from "./scheduled";
+import { ReviewStore } from "./review";
+import { InstructionService } from "./instructions";
 import { registerMethods } from "./methods";
 
 /**
@@ -58,9 +62,27 @@ function main(): void {
   const plugins = new PluginService(dataDir);
   const skills = new SkillService(dataDir);
   const mcp = new McpService(dataDir);
-  const tools = new ToolRunner(sessions, permissions, plugins, mcp);
+  const subagents = new SubagentService(dataDir);
+  const scheduled = new ScheduledService(dataDir);
+  const review = new ReviewStore(join(dataDir, "review"));
+  const instructionService = new InstructionService(dataDir);
+  const tools = new ToolRunner(sessions, permissions, plugins, mcp, review);
 
-  registerMethods({ server, dataDir, sessions, providers, permissions, tools, plugins, skills, mcp });
+  registerMethods({
+    server,
+    dataDir,
+    sessions,
+    providers,
+    permissions,
+    tools,
+    plugins,
+    skills,
+    mcp,
+    subagents,
+    scheduled,
+    review,
+    instructions: instructionService,
+  });
 
   let shuttingDown = false;
   const shutdown = (signal: string): void => {

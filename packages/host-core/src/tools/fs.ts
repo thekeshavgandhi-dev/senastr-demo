@@ -1,4 +1,4 @@
-import { lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, resolve, sep } from "node:path";
 import { ErrorCodes, RpcError } from "@senastr/shared";
 
@@ -60,6 +60,17 @@ export function writeFileTool(project: string, args: Record<string, unknown>): s
   mkdirSync(dirname(target), { recursive: true });
   writeFileSync(target, content, "utf8");
   return `wrote ${Buffer.byteLength(content, "utf8")} bytes to ${rel}`;
+}
+
+export function deleteFileTool(project: string, args: Record<string, unknown>): string {
+  const rel = asString(args.path, "path");
+  const target = safeJoin(project, rel);
+  const st = lstatSync(target);
+  if (st.isDirectory()) {
+    throw new RpcError(ErrorCodes.INVALID_PARAMS, `path is a directory, not a file: ${rel}`);
+  }
+  unlinkSync(target);
+  return `deleted ${rel}`;
 }
 
 export function listDirTool(project: string, args: Record<string, unknown>): string {
