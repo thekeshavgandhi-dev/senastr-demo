@@ -1,6 +1,7 @@
 import type { ChatMessage, Usage } from "@senastr/shared";
 import type { ModelSpec, Provider, ProviderChatParams, ProviderEvent } from "../types";
 import { parseSseLines, parseToolArgs, safeReadText } from "./openai";
+import { postToModel } from "./resilient";
 
 /** OpenAI Responses API streaming adapter. Named OpenAI providers use this
  * modern wire format, while compatible gateways can keep Chat Completions. */
@@ -26,15 +27,18 @@ export class OpenAIResponsesProvider implements Provider {
       }));
     }
 
-    const res = await fetch(`${base}/responses`, {
-      method: "POST",
-      headers: {
-        ...(this.spec.headers ?? {}),
-        "content-type": "application/json",
-        ...(this.spec.apiKey ? { authorization: `Bearer ${this.spec.apiKey}` } : {}),
-      },
-      body: JSON.stringify(body),
+    const res = await postToModel({
+      spec: this.spec,
       signal: params.signal,
+      build: (apiKey) => ({
+        url: `${base}/responses`,
+        headers: {
+          ...(this.spec.headers ?? {}),
+          "content-type": "application/json",
+          ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}),
+        },
+        body: JSON.stringify(body),
+      }),
     });
     if (!res.ok || !res.body) {
       const detail = await safeReadText(res);

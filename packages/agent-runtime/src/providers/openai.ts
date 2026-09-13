@@ -1,5 +1,6 @@
 import type { ProviderEvent, Provider, ProviderChatParams, ModelSpec } from "../types";
 import { toOpenAIMessages } from "../messages";
+import { postToModel } from "./resilient";
 import type { Usage } from "@senastr/shared";
 
 /**
@@ -27,15 +28,18 @@ export class OpenAICompatibleProvider implements Provider {
       }));
     }
 
-    const res = await fetch(`${base}/chat/completions`, {
-      method: "POST",
-      headers: {
-        ...(this.spec.headers ?? {}),
-        "content-type": "application/json",
-        ...(this.spec.apiKey ? { authorization: `Bearer ${this.spec.apiKey}` } : {}),
-      },
-      body: JSON.stringify(body),
+    const res = await postToModel({
+      spec: this.spec,
       signal: params.signal,
+      build: (apiKey) => ({
+        url: `${base}/chat/completions`,
+        headers: {
+          ...(this.spec.headers ?? {}),
+          "content-type": "application/json",
+          ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}),
+        },
+        body: JSON.stringify(body),
+      }),
     });
 
     if (!res.ok || !res.body) {

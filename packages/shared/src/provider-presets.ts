@@ -119,6 +119,16 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     requiresApiKey: true,
   },
   {
+    id: "nvidia",
+    vendorKey: "nvidia",
+    name: "NVIDIA NIM",
+    baseUrl: "https://integrate.api.nvidia.com/v1",
+    kind: "openai",
+    apiStyle: "chat_completions",
+    requiresApiKey: true,
+    aliases: ["nvidia-nim", "nim"],
+  },
+  {
     id: "zai",
     vendorKey: "zai",
     name: "Z.AI",

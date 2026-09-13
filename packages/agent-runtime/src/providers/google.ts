@@ -1,6 +1,7 @@
 import type { ChatMessage, Usage } from "@senastr/shared";
 import type { ModelSpec, Provider, ProviderChatParams, ProviderEvent } from "../types";
 import { parseSseLines, safeReadText } from "./openai";
+import { postToModel } from "./resilient";
 
 /** Google Generative Language (Gemini) streaming adapter. */
 export class GoogleGenerativeAIProvider implements Provider {
@@ -8,8 +9,6 @@ export class GoogleGenerativeAIProvider implements Provider {
 
   async *streamChat(params: ProviderChatParams): AsyncIterable<ProviderEvent> {
     const base = (this.spec.baseUrl ?? "https://generativelanguage.googleapis.com/v1beta").replace(/\/+$/, "");
-    const query = new URLSearchParams({ alt: "sse" });
-    if (this.spec.apiKey) query.set("key", this.spec.apiKey);
     const model = params.model.replace(/^models\//, "");
     const body: Record<string, unknown> = {
       contents: toGeminiContents(params.messages),
@@ -32,15 +31,19 @@ export class GoogleGenerativeAIProvider implements Provider {
       ];
     }
 
-    const res = await fetch(
-      `${base}/models/${encodeURIComponent(model)}:streamGenerateContent?${query.toString()}`,
-      {
-        method: "POST",
-        headers: { ...(this.spec.headers ?? {}), "content-type": "application/json" },
-        body: JSON.stringify(body),
-        signal: params.signal,
+    const res = await postToModel({
+      spec: this.spec,
+      signal: params.signal,
+      build: (apiKey) => {
+        const query = new URLSearchParams({ alt: "sse" });
+        if (apiKey) query.set("key", apiKey);
+        return {
+          url: `${base}/models/${encodeURIComponent(model)}:streamGenerateContent?${query.toString()}`,
+          headers: { ...(this.spec.headers ?? {}), "content-type": "application/json" },
+          body: JSON.stringify(body),
+        };
       },
-    );
+    });
     if (!res.ok || !res.body) {
       const detail = await safeReadText(res);
       throw new Error(`model request failed (HTTP ${res.status}): ${detail.slice(0, 400)}`);

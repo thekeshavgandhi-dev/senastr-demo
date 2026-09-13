@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import {
   ErrorCodes,
+  SECRET_MASK,
   RpcError,
   type ProviderApiStyle,
   type ProviderConfig,
@@ -13,7 +14,10 @@ import { JsonFileStore } from "./store";
 
 const TEST_TIMEOUT_MS = 10_000;
 const MAX_MODELS = 500;
-export const MASKED_PROVIDER_SECRET = "••••••";
+/** Back-compat alias; the canonical constant lives in @senastr/shared. */
+export const MASKED_PROVIDER_SECRET = SECRET_MASK;
+const MAX_KEYS = 16;
+const MAX_RATE_LIMIT_PER_MIN = 100_000;
 const RESERVED_HEADERS = new Set([
   "authorization",
   "proxy-authorization",
@@ -54,10 +58,10 @@ export class ProviderStore {
     const merged = existing
       ? {
           ...config,
-          apiKey: config.apiKey && config.apiKey !== MASKED_PROVIDER_SECRET ? config.apiKey : existing.apiKey,
+          apiKeys: mergeKeyPool(config.apiKeys, config.apiKey, existing),
           headers: mergeMaskedHeaders(config.headers, existing.headers),
         }
-      : config;
+      : { ...config, apiKeys: mergeKeyPool(config.apiKeys, config.apiKey, undefined) };
     const cfg = validateProvider(merged);
     this.store.update((all) => {
       const idx = all.findIndex((p) => p.id === cfg.id);
@@ -83,10 +87,10 @@ export class ProviderStore {
     const draft = existing
       ? {
           ...input,
-          apiKey: input.apiKey && input.apiKey !== MASKED_PROVIDER_SECRET ? input.apiKey : existing.apiKey,
+          apiKeys: mergeKeyPool(input.apiKeys, input.apiKey, existing),
           headers: mergeMaskedHeaders(input.headers, existing.headers),
         }
-      : input;
+      : { ...input, apiKeys: mergeKeyPool(input.apiKeys, input.apiKey, undefined) };
     const normalized = normalizeDiscoveryInput(draft);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TEST_TIMEOUT_MS);
@@ -136,19 +140,27 @@ export function defaultBaseUrl(kind: ProviderKind): string {
   return "https://api.openai.com/v1";
 }
 
+export function effectiveApiKeys(cfg: Pick<ProviderConfig, "apiKey" | "apiKeys">): string[] {
+  if (Array.isArray(cfg.apiKeys) && cfg.apiKeys.length) return cfg.apiKeys;
+  return cfg.apiKey ? [cfg.apiKey] : [];
+}
+
 export function maskProvider(cfg: ProviderConfig): ProviderSummary {
   const normalized = normalizeStoredProvider(cfg);
+  const keys = effectiveApiKeys(normalized);
   return {
     id: normalized.id,
     kind: normalized.kind,
     vendorKey: normalized.vendorKey,
     label: normalized.label,
     baseUrl: normalized.baseUrl,
-    hasApiKey: Boolean(normalized.apiKey),
+    hasApiKey: keys.length > 0,
+    apiKeyCount: keys.length,
     apiStyle: normalized.apiStyle ?? defaultApiStyle(normalized.kind),
     headers: normalized.headers
       ? Object.fromEntries(Object.keys(normalized.headers).map((name) => [name, MASKED_PROVIDER_SECRET]))
       : undefined,
+    rateLimitPerMin: normalized.rateLimitPerMin,
     models: normalized.models,
     defaultModel: normalized.defaultModel,
     enabled: normalized.enabled !== false,
@@ -160,7 +172,49 @@ function normalizeStoredProvider(cfg: ProviderConfig): ProviderConfig {
     ...cfg,
     enabled: cfg.enabled !== false,
     apiStyle: cfg.apiStyle ?? defaultApiStyle(cfg.kind),
+    rateLimitPerMin: normalizeRateLimit(cfg.rateLimitPerMin),
   };
+}
+
+/**
+ * Merge an edited key pool against the stored one. Entries equal to the
+ * secret mask consume the next still-unused stored key (in stored order);
+ * anything else is taken literally. When the edit carries no key material at
+ * all, the stored pool is kept unchanged. Credentials never leave host-core.
+ */
+function mergeKeyPool(
+  next: string[] | undefined,
+  legacyApiKey: string | undefined,
+  existing: ProviderConfig | undefined,
+): string[] {
+  const pool = existing ? [...effectiveApiKeys(existing)] : [];
+  let cursor = 0;
+  let resolved: string[];
+  if (Array.isArray(next)) {
+    resolved = next.flatMap((entry) => {
+      if (typeof entry !== "string") return [];
+      const value = entry.trim();
+      if (!value) return [];
+      if (value === SECRET_MASK) {
+        const stored = pool[cursor];
+        if (stored === undefined) return []; // mask with nothing left to keep
+        cursor += 1;
+        return [stored];
+      }
+      return [value];
+    });
+  } else if (legacyApiKey && legacyApiKey.trim() && legacyApiKey !== SECRET_MASK) {
+    resolved = [legacyApiKey.trim()];
+  } else {
+    resolved = [...pool];
+  }
+  return [...new Set(resolved)].slice(0, MAX_KEYS);
+}
+
+function normalizeRateLimit(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  const n = Math.floor(value);
+  return n >= 1 ? Math.min(n, MAX_RATE_LIMIT_PER_MIN) : undefined;
 }
 
 export function validateProvider(cfg: unknown): ProviderConfig {
@@ -188,15 +242,25 @@ export function validateProvider(cfg: unknown): ProviderConfig {
   const baseUrl = typeof c.baseUrl === "string" && c.baseUrl.trim() ? c.baseUrl.trim().replace(/\/+$/, "") : undefined;
   if (baseUrl) validateUrl(baseUrl, "provider.baseUrl");
   const headers = sanitizeHeaders(c.headers);
+  const rawKeys = Array.isArray(c.apiKeys) ? c.apiKeys : typeof c.apiKey === "string" ? [c.apiKey] : [];
+  const apiKeys = [
+    ...new Set(
+      rawKeys
+        .map((key) => (typeof key === "string" ? key.trim() : ""))
+        .filter((key) => key.length > 0 && key !== SECRET_MASK),
+    ),
+  ].slice(0, MAX_KEYS);
   return {
     id: c.id,
     kind: c.kind,
     vendorKey: typeof c.vendorKey === "string" && c.vendorKey.trim() ? c.vendorKey.trim() : undefined,
     label: c.label.trim(),
     baseUrl,
-    apiKey: typeof c.apiKey === "string" && c.apiKey.trim() ? c.apiKey.trim() : undefined,
+    apiKey: apiKeys[0],
+    apiKeys,
     apiStyle,
     headers: Object.keys(headers).length ? headers : undefined,
+    rateLimitPerMin: normalizeRateLimit(c.rateLimitPerMin),
     models,
     defaultModel:
       typeof c.defaultModel === "string" && models.includes(c.defaultModel.trim())
@@ -206,17 +270,18 @@ export function validateProvider(cfg: unknown): ProviderConfig {
   };
 }
 
-function normalizeDiscoveryInput(input: ProviderDiscoveryInput): Required<Pick<ProviderDiscoveryInput, "kind" | "apiStyle">> & ProviderDiscoveryInput {
+function normalizeDiscoveryInput(input: ProviderDiscoveryInput & { apiKeys?: string[] }): Required<Pick<ProviderDiscoveryInput, "kind" | "apiStyle">> & ProviderDiscoveryInput {
   const kind = input?.kind;
   if (kind !== "openai" && kind !== "anthropic" && kind !== "google") {
     throw new RpcError(ErrorCodes.INVALID_PARAMS, "a valid provider kind is required");
   }
   const baseUrl = (input.baseUrl?.trim() || defaultBaseUrl(kind)).replace(/\/+$/, "");
   validateUrl(baseUrl, "base URL");
+  const pool = Array.isArray(input.apiKeys) && input.apiKeys.length ? input.apiKeys : input.apiKey ? [input.apiKey] : [];
   return {
     kind,
     baseUrl,
-    apiKey: input.apiKey?.trim() || undefined,
+    apiKey: pool[0]?.trim() || undefined,
     apiStyle: normalizeApiStyle(input.apiStyle, kind),
     headers: sanitizeHeaders(input.headers),
   };

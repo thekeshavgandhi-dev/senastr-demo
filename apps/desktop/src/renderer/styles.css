@@ -1160,6 +1160,17 @@ pre,
 .kv-editor { display: flex; flex-direction: column; gap: 6px; }
 .kv-row { display: grid; grid-template-columns: minmax(100px, .8fr) minmax(140px, 1.2fr) 30px; gap: 6px; }
 .kv-row input { height: 31px; padding: 0 8px; font-family: var(--mono); font-size: 10px; }
+.key-pool { display: flex; flex-direction: column; gap: 6px; }
+.key-row { display: flex; align-items: center; gap: 8px; min-height: 31px; padding: 0 8px; border: 1px solid #2a3039; border-radius: 7px; background: #13161b; }
+.key-index { width: 17px; height: 17px; display: grid; place-items: center; border-radius: 5px; background: #292f38; color: var(--text-faint); font-size: 10px; font-weight: 700; flex: none; }
+.key-value { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 10px; }
+.key-remove { border: 0; background: transparent; color: var(--text-faint); padding: 3px; border-radius: 5px; cursor: pointer; display: grid; place-items: center; flex: none; }
+.key-remove:hover { color: #f28b8b; background: #241b1d; }
+.key-add-row { display: grid; grid-template-columns: 1fr auto; gap: 6px; }
+.key-add-row input { height: 31px; padding: 0 8px; font-family: var(--mono); font-size: 10px; }
+.key-add-row button { border: 1px solid #2a3039; background: #1d2229; color: var(--text); border-radius: 7px; height: 31px; padding: 0 12px; font-size: 11px; cursor: pointer; }
+.key-add-row button:disabled { opacity: .42; cursor: default; }
+.key-add-row button:not(:disabled):hover { background: #262c35; }
 .provider-model-section { margin-top: 22px; border-top: 1px solid #292f38; padding-top: 16px; }
 .provider-model-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 15px; }
 .provider-model-heading p { margin: 2px 0 0 25px; color: var(--text-faint); font-size: 10px; }

@@ -79,9 +79,16 @@ Key properties:
   servers over stdio or Streamable HTTP. Plugin and MCP tools get the same
   confinement and permission gating as builtins.
 - **Provider catalog + live models.** Pick from named services (OpenAI,
-  Anthropic, Gemini, OpenRouter, Groq, DeepSeek, Ollama and more) or configure
-  a custom endpoint. Model IDs are discovered from the provider and selected
-  explicitly; custom IDs and non-auth routing headers are supported.
+  Anthropic, Gemini, OpenRouter, Groq, xAI, Mistral, DeepSeek, NVIDIA NIM,
+  Ollama, LM Studio and more) or configure a custom endpoint. Model IDs are
+  discovered from the provider and selected explicitly; custom IDs and
+  non-auth routing headers are supported.
+- **Key pools + rate-limit failover.** Every provider accepts multiple API
+  keys. When a key hits its limit (HTTP 429, `Retry-After` honored) or is
+  rejected (401/403), the next key in the pool takes over automatically —
+  cooled-down keys rejoin the round-robin — so a rate limit never stops the
+  agent mid-task. An optional per-provider "requests per minute" throttle
+  keeps you under the provider's limits before they can reject you.
 
 ## Quick start
 

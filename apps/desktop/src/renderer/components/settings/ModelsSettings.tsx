@@ -1,9 +1,10 @@
 import { useMemo, useState } from "react";
-import type {
-  ProviderApiStyle,
-  ProviderConfig,
-  ProviderKind,
-  ProviderSummary,
+import {
+  SECRET_MASK,
+  type ProviderApiStyle,
+  type ProviderConfig,
+  type ProviderKind,
+  type ProviderSummary,
 } from "@senastr/shared";
 import { PROVIDER_PRESETS, matchProviderPreset } from "@senastr/provider-presets";
 import type { SenastrStore } from "../../hooks/useSenastr";
@@ -22,6 +23,14 @@ import {
 } from "./SettingsPrimitives";
 
 const CUSTOM_SERVICE = "custom";
+
+/** One row of the API key pool. Stored keys are masked; new keys keep their
+ * real value locally until the provider is saved (host-core never sees the
+ * mask resolved — it does that itself). */
+interface KeyRow {
+  value: string;
+  stored: boolean;
+}
 
 export function ModelsSettings({ store }: { store: SenastrStore }) {
   const [setup, setSetup] = useState<ProviderSummary | "new" | null>(null);
@@ -145,6 +154,8 @@ export function ModelsSettings({ store }: { store: SenastrStore }) {
                       <span>{hostLabel(provider.baseUrl)}</span><b>·</b>
                       <span>{provider.models.length} model{provider.models.length === 1 ? "" : "s"}</span><b>·</b>
                       <span>{apiStyleLabel(provider.apiStyle)}</span>
+                      {(provider.apiKeyCount ?? 0) > 1 ? <><b>·</b><span>{provider.apiKeyCount} keys</span></> : null}
+                      {provider.rateLimitPerMin ? <><b>·</b><span>≤ {provider.rateLimitPerMin} req/min</span></> : null}
                     </div>
                   </div>
                   <div className="provider-row-actions">
@@ -207,7 +218,16 @@ function ProviderSetupModal({ provider, providers, onClose, onSaved, onError }: 
   const [baseUrl, setBaseUrl] = useState(provider?.baseUrl ?? matched?.baseUrl ?? "");
   const [kind, setKind] = useState<ProviderKind>(provider?.kind ?? "openai");
   const [apiStyle, setApiStyle] = useState<ProviderApiStyle>(provider?.apiStyle ?? "chat_completions");
-  const [apiKey, setApiKey] = useState("");
+  const [keyRows, setKeyRows] = useState<KeyRow[]>(() =>
+    Array.from({ length: provider?.apiKeyCount ?? (provider?.hasApiKey ? 1 : 0) }, () => ({
+      value: SECRET_MASK,
+      stored: true,
+    })),
+  );
+  const [keyInput, setKeyInput] = useState("");
+  const [rateLimit, setRateLimit] = useState<string>(
+    provider?.rateLimitPerMin ? String(provider.rateLimitPerMin) : "",
+  );
   const [chosen, setChosen] = useState<string[]>(provider?.models ?? []);
   const [available, setAvailable] = useState<string[]>(provider?.models ?? []);
   const [modelSearch, setModelSearch] = useState("");
@@ -261,7 +281,7 @@ function ProviderSetupModal({ provider, providers, onClose, onSaved, onError }: 
         id: provider?.id,
         kind,
         baseUrl: normalizeBaseUrl(baseUrl, apiStyle),
-        apiKey: apiKey.trim() || undefined,
+        apiKeys: keyPoolPayload(),
         apiStyle,
         headers: pairsToRecord(headers),
       });
@@ -285,6 +305,21 @@ function ProviderSetupModal({ provider, providers, onClose, onSaved, onError }: 
     setCustomModel("");
   };
 
+  const addKey = () => {
+    const value = keyInput.trim();
+    if (!value) return;
+    setKeyRows((rows) => [...rows, { value, stored: false }]);
+    setKeyInput("");
+  };
+
+  const removeKeyRow = (index: number) => {
+    setKeyRows((rows) => rows.filter((_, i) => i !== index));
+  };
+
+  /** Stored rows keep the mask sentinel so host-core resolves them against
+   * the keys it already has; new rows are sent as-is. */
+  const keyPoolPayload = () => keyRows.map((row) => row.value);
+
   const save = async () => {
     if (!service) return onError("Choose an AI service");
     if (!name.trim() || !baseUrl.trim()) return onError("Name and base URL are required");
@@ -298,9 +333,10 @@ function ProviderSetupModal({ provider, providers, onClose, onSaved, onError }: 
         vendorKey: selectedPreset?.vendorKey ?? "custom",
         label: name.trim(),
         baseUrl: normalizeBaseUrl(baseUrl, apiStyle),
-        apiKey: apiKey.trim() || undefined,
+        apiKeys: keyPoolPayload(),
         apiStyle,
         headers: pairsToRecord(headers),
+        rateLimitPerMin: parseRateLimit(rateLimit),
         models: chosen,
         defaultModel: chosen[0],
         enabled: provider?.enabled ?? true,
@@ -345,7 +381,40 @@ function ProviderSetupModal({ provider, providers, onClose, onSaved, onError }: 
           {!service ? <div className="provider-step-placeholder"><SettingsIcon name="arrow-left" size={17} /> Pick a service to continue</div> : <>
             <div className="provider-fields-grid">
               <Field label="Name"><input value={name} onChange={(event) => setName(event.target.value)} /></Field>
-              <Field label="API key" hint={provider?.hasApiKey ? "leave blank to keep stored key" : selectedPreset?.requiresApiKey ? "required by service" : "optional"}><input type="password" value={apiKey} placeholder={provider?.hasApiKey ? "Stored securely" : "sk-…"} onChange={(event) => setApiKey(event.target.value)} /></Field>
+              <Field label="Rate limit / min" hint="Client-side throttle across all keys; blank = off"><input type="number" min={1} max={100000} value={rateLimit} placeholder="e.g. 60" onChange={(event) => setRateLimit(event.target.value)} /></Field>
+              <Field
+                label="API keys"
+                wide
+                hint={
+                  keyRows.length > 1
+                    ? "When a key hits its rate limit, senastr switches to the next one automatically"
+                    : selectedPreset?.requiresApiKey
+                      ? "required by service — add spare keys to ride through rate limits"
+                      : "optional — local endpoints need no key"
+                }
+              >
+                <div className="key-pool">
+                  {keyRows.map((row, index) => (
+                    <div className="key-row" key={index}>
+                      <span className="key-index">{index + 1}</span>
+                      <code className="key-value">{row.value}</code>
+                      {row.stored ? <span className="settings-badge">stored</span> : null}
+                      <button type="button" className="key-remove" title={row.stored ? "Delete stored key" : "Remove key"} onClick={() => removeKeyRow(index)}><SettingsIcon name="x" size={13} /></button>
+                    </div>
+                  ))}
+                  <div className="key-add-row">
+                    <input
+                      type="password"
+                      className="mono"
+                      value={keyInput}
+                      placeholder="Paste an API key (sk-…)"
+                      onChange={(event) => setKeyInput(event.target.value)}
+                      onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addKey(); } }}
+                    />
+                    <button type="button" disabled={!keyInput.trim()} onClick={addKey}>Add key</button>
+                  </div>
+                </div>
+              </Field>
               <Field label="Base URL" wide><input className="mono" value={baseUrl} placeholder="https://api.example.com/v1" onChange={(event) => setBaseUrl(event.target.value)} /></Field>
               {service === CUSTOM_SERVICE ? <Field label="API format" wide><select value={apiStyle} onChange={(event) => { const style = event.target.value as ProviderApiStyle; setApiStyle(style); setKind(kindForStyle(style)); }}><option value="chat_completions">OpenAI Chat Completions</option><option value="responses">OpenAI Responses</option><option value="anthropic_messages">Anthropic Messages</option><option value="google_generative_ai">Google Generative AI</option></select></Field> : null}
             </div>
@@ -423,6 +492,11 @@ function normalizeBaseUrl(value: string, style: ProviderApiStyle): string {
     }
   }
   return normalized;
+}
+
+function parseRateLimit(value: string): number | undefined {
+  const parsed = Math.floor(Number(value));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 function uniqueProviderId(base: string, providers: ProviderSummary[]): string {
