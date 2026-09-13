@@ -13,13 +13,13 @@ Local-first · Model-agnostic · Permission-gated · Extensible
 ---
 
 senastr is a desktop workspace for AI coding agents. You open a local
-project, pick any model (OpenAI, Anthropic, or any OpenAI-compatible
-endpoint such as Ollama or vLLM), and the agent inspects, modifies and runs
+project, pick any model (OpenAI, Anthropic, Google Gemini, or any compatible
+endpoint such as OpenRouter, Ollama or vLLM), and the agent inspects, modifies and runs
 things in that project — while every privileged action passes through a
 local permission layer that you approve.
 
 **No account. No relay. No lock-in.** Sessions, transcripts, credentials and
-files stay on your machine (`~/.senastr`). Model requests go directly to the
+configuration stay on your machine. Model requests go directly to the
 endpoint you configure.
 
 > senastr is a from-scratch implementation that follows the architecture of
@@ -38,27 +38,27 @@ endpoint you configure.
 │  │ Renderer (React)             │   │ Main process           │  │
 │  │  • chat UI, composer         │   │  • window + lifecycle  │  │
 │  │  • permission dialog         │   │  • owns agent runtime  │  │
-│  │  • provider/plugin settings  │◄──┤  • narrow typed IPC    │  │
-│  │  (sandboxed, no node, no     │   │    surface             │  │
-│  │   secrets)                   │   └───────────┬────────────┘  │
+│  │  • models, skills, MCP       │◄──┤  • narrow typed IPC    │  │
+│  │  • provider/plugin settings  │   │    surface             │  │
+│  │  • sandboxed; no secrets     │   └───────────┬────────────┘  │
 │  └──────────────────────────────┘               │               │
 └──────────────────────────────────────────────────┼───────────────┘
                                                   │ in-process
                     ┌─────────────────────────────▼─────────────┐
                     │ Agent runtime (packages/agent-runtime)    │
                     │  • model → tool-call → result loop        │
-                    │  • OpenAI-compatible + Anthropic providers│
-                    │  • streaming events, abort, max-steps     │
+                    │  • OpenAI/Responses, Anthropic + Gemini   │
+                    │  • streaming events, skills, abort        │
                     └─────────────────────────────┬─────────────┘
                                                   │ NDJSON JSON-RPC
                                                   │ over stdio
                     ┌─────────────────────────────▼─────────────┐
                     │ Host core sidecar (packages/host-core)    │
                     │  • sessions + transcripts (local files)   │
-                    │  • providers + API keys (never leave)     │
+                    │  • providers + API keys (never rendered)  │
                     │  • tools: read/write/list/shell           │
                     │  • permission gateway (grants, 120s deny) │
-                    │  • plugin registry                        │
+                    │  • plugins, skills + MCP registry/runtime │
                     └───────────────────────────────────────────┘
 ```
 
@@ -74,9 +74,14 @@ Key properties:
   120s**. Grants are per tool per session (or "always") and revocable.
 - **Project confinement.** All tool paths resolve inside the session's
   project directory; anything escaping it is rejected.
-- **Extensible.** Plugins are declarative manifest + shell-command tools
-  (v0), installed/removed from Settings; they get the same confinement and
-  permission gating as builtins.
+- **Extensible.** Settings now includes the capability workbench used by the
+  reference app: declarative plugins, global/project Markdown skills, and MCP
+  servers over stdio or Streamable HTTP. Plugin and MCP tools get the same
+  confinement and permission gating as builtins.
+- **Provider catalog + live models.** Pick from named services (OpenAI,
+  Anthropic, Gemini, OpenRouter, Groq, DeepSeek, Ollama and more) or configure
+  a custom endpoint. Model IDs are discovered from the provider and selected
+  explicitly; custom IDs and non-auth routing headers are supported.
 
 ## Quick start
 
@@ -88,8 +93,10 @@ pnpm build          # builds packages + the desktop app
 pnpm dev            # starts the desktop app (Electron) with hot reload
 ```
 
-First run: **Open project…** → pick a folder → **Settings** → add a model
-provider (label, base URL, API key, model ids) → chat.
+First run: **Open project…** → pick a folder → **Settings → Models** →
+**Add provider** → choose a service, fetch and select its models → chat. The
+same Settings workspace manages **Skills**, **MCP**, **Extensions**, and
+standing permission grants.
 
 To try a fully local model, add an OpenAI-compatible provider pointing at
 Ollama: base URL `http://127.0.0.1:11434/v1`, no API key, model e.g.
@@ -133,19 +140,26 @@ docs/adr                architecture decision records
 
 ## Data & privacy
 
-All state lives under `~/.senastr` (override with `SENASTR_DATA_DIR`):
+Host-core keeps all state in one local directory. The standalone sidecar uses
+`~/.senastr`; the desktop uses its platform-specific Electron user-data folder
+and shows the exact path under **Settings → About**. Set `SENASTR_DATA_DIR` to
+override either default.
 
-```
-~/.senastr/
+```text
+<host-data>/
 ├── sessions/<id>.json    transcripts (one file per session)
 ├── providers.json        provider configs incl. API keys
 ├── grants.json           standing permission grants
+├── skills.json           global/project instruction packs
+├── mcp-servers.json      MCP transports and credentials
 ├── plugins.json          installed plugin registry
 └── plugins/<name>/       installed plugin folders
 ```
 
-Nothing is uploaded anywhere. The only network traffic is your model requests
-to the endpoints you configure, and the provider "test connection" probe.
+senastr has no hosted relay or telemetry path. Network traffic goes only to
+model providers and Streamable HTTP MCP endpoints you configure (including
+connection/model-discovery probes), plus anything you explicitly approve a
+local command or extension to run.
 
 ## Roadmap
 
@@ -158,4 +172,6 @@ to the endpoints you configure, and the provider "test connection" probe.
 - **Plan mode** (research → frozen plan → approval → execution) and
   session forking
 - **Dynamic plugins** (code-loaded, sandboxed) behind the same manifest
-- MCP servers, subagents, work panel (diffs/reviews), i18n
+- Subagents, work panel (diffs/reviews), i18n
+- MCP OAuth and richer transport diagnostics; the stdio and Streamable HTTP
+  runtime, connection tests, secret masking, and tool routing are available now

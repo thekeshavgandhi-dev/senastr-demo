@@ -30,6 +30,7 @@ export class OpenAICompatibleProvider implements Provider {
     const res = await fetch(`${base}/chat/completions`, {
       method: "POST",
       headers: {
+        ...(this.spec.headers ?? {}),
         "content-type": "application/json",
         ...(this.spec.apiKey ? { authorization: `Bearer ${this.spec.apiKey}` } : {}),
       },

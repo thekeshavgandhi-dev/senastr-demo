@@ -1,283 +1,113 @@
-import { useState } from "react";
-import type { ProviderConfig, ProviderKind, ProviderTestResult } from "@senastr/shared";
+import { useMemo, useState, type ReactNode } from "react";
+import type { PermissionGrant } from "@senastr/shared";
 import type { SenastrStore } from "../hooks/useSenastr";
 import { api, cleanError } from "../lib/api";
+import { McpSettings } from "./settings/McpSettings";
+import { ModelsSettings } from "./settings/ModelsSettings";
+import { PluginsSettings } from "./settings/PluginsSettings";
+import { SettingsIcon, type SettingsIconName } from "./settings/SettingsIcons";
+import { SkillsSettings } from "./settings/SkillsSettings";
+import { EmptyState } from "./settings/SettingsPrimitives";
+
+type SettingsTab = "models" | "skills" | "mcp" | "plugins" | "permissions" | "about";
+type Group = "Agent" | "Security" | "System";
+
+const NAV: Array<{
+  id: SettingsTab;
+  label: string;
+  title: string;
+  description: string;
+  icon: SettingsIconName;
+  group: Group;
+  keywords: string;
+}> = [
+  { id: "models", label: "Models", title: "Model configuration", description: "Providers, model catalogs, and your default model", icon: "sparkles", group: "Agent", keywords: "ai api key provider openai anthropic gemini ollama default" },
+  { id: "skills", label: "Skills", title: "Skills", description: "Reusable instructions for global and project workflows", icon: "book", group: "Agent", keywords: "prompt instructions markdown capability" },
+  { id: "mcp", label: "MCP", title: "MCP servers", description: "Connect local commands and Streamable HTTP tool servers", icon: "server", group: "Agent", keywords: "model context protocol tools stdio http server" },
+  { id: "plugins", label: "Extensions", title: "Extensions", description: "Install and manage local agent plugins", icon: "plug", group: "Agent", keywords: "plugins marketplace tools install local" },
+  { id: "permissions", label: "Permissions", title: "Permission grants", description: "Review standing approvals for privileged tools", icon: "shield", group: "Security", keywords: "grants security allow write execute revoke" },
+  { id: "about", label: "About", title: "About senastr", description: "Version, storage, privacy, and architecture", icon: "info", group: "System", keywords: "version data privacy local host core" },
+];
 
 export function SettingsView({ store }: { store: SenastrStore }) {
+  const [tab, setTab] = useState<SettingsTab>("models");
+  const [query, setQuery] = useState("");
+  const active = NAV.find((item) => item.id === tab) ?? NAV[0];
+  const filtered = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return needle ? NAV.filter((item) => `${item.label} ${item.title} ${item.keywords}`.toLowerCase().includes(needle)) : NAV;
+  }, [query]);
+
+  const content: Record<SettingsTab, ReactNode> = {
+    models: <ModelsSettings store={store} />,
+    skills: <SkillsSettings store={store} />,
+    mcp: <McpSettings store={store} />,
+    plugins: <PluginsSettings store={store} />,
+    permissions: <PermissionsSettings store={store} />,
+    about: <AboutSettings version={store.version} dataDir={store.dataDir} />,
+  };
+
   return (
-    <div className="settings">
-      <div className="settings-inner">
-        <h1>Settings</h1>
-        <ProvidersSection store={store} />
-        <PluginsSection store={store} />
-        <GrantsSection store={store} />
-        <div className="about">
-          <h2>About</h2>
-          <p>
-            senastr v{store.version || "0.1.0"} — a local-first AI coding agent workspace. Your sessions,
-            credentials and files live in <code>~/.senastr</code> (or <code>$SENASTR_DATA_DIR</code>). Model
-            requests go directly to the endpoint you configure — no relay, no account.
-          </p>
+    <div className="settings-shell">
+      <aside className="settings-nav">
+        <div className="settings-nav-top">
+          <button type="button" className="settings-back" onClick={() => store.setView("chat")}><SettingsIcon name="arrow-left" size={15} /> Back to app</button>
+          <div className="settings-nav-search"><SettingsIcon name="search" size={14} /><input value={query} autoFocus={false} placeholder="Search settings…" aria-label="Search settings" onChange={(event) => setQuery(event.target.value)} />{query ? <button type="button" aria-label="Clear search" onClick={() => setQuery("")}><SettingsIcon name="x" size={12} /></button> : null}</div>
         </div>
-      </div>
+        <nav className="settings-nav-scroll" aria-label="Settings pages">
+          {filtered.length ? (["Agent", "Security", "System"] as Group[]).map((group) => {
+            const rows = filtered.filter((item) => item.group === group);
+            if (!rows.length) return null;
+            return <div className="settings-nav-group" key={group}><span>{group}</span>{rows.map((item) => <button type="button" key={item.id} className={tab === item.id ? "active" : ""} onClick={() => setTab(item.id)}><SettingsIcon name={item.icon} size={15} /><span>{item.label}</span></button>)}</div>;
+          }) : <div className="settings-nav-no-results">No settings found</div>}
+        </nav>
+        <div className="settings-nav-footer"><div className="settings-mini-brand"><span>s</span><div><strong>senastr</strong><small>local-first agent</small></div></div>{store.version ? <code>v{store.version}</code> : null}</div>
+      </aside>
+      <main className="settings-content">
+        <div className="settings-content-inner">
+          <header className="settings-page-header"><div><h1>{active.title}</h1><p>{active.description}</p></div></header>
+          {content[tab]}
+        </div>
+      </main>
     </div>
   );
 }
 
-function ProvidersSection({ store }: { store: SenastrStore }) {
-  const [kind, setKind] = useState<ProviderKind>("openai");
-  const [label, setLabel] = useState("");
-  const [baseUrl, setBaseUrl] = useState("");
-  const [apiKey, setApiKey] = useState("");
-  const [models, setModels] = useState("");
-  const [testResults, setTestResults] = useState<Record<string, ProviderTestResult>>({});
-  const [testing, setTesting] = useState<string | null>(null);
-
-  const save = async () => {
-    const modelList = models
-      .split(",")
-      .map((m) => m.trim())
-      .filter(Boolean);
-    if (!label.trim() || modelList.length === 0) {
-      store.pushNotice("Label and at least one model are required", "error");
-      return;
-    }
-    const config: ProviderConfig = {
-      id: label.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "provider",
-      kind,
-      label: label.trim(),
-      baseUrl: baseUrl.trim() || undefined,
-      apiKey: apiKey.trim() || undefined,
-      models: modelList,
-      defaultModel: modelList[0],
-    };
-    try {
-      await api.provider.set(config);
-      await store.refresh();
-      setLabel("");
-      setBaseUrl("");
-      setApiKey("");
-      setModels("");
-      store.pushNotice(`Provider “${config.label}” saved`, "info");
-    } catch (err) {
-      store.pushNotice(cleanError(err), "error");
-    }
+function PermissionsSettings({ store }: { store: SenastrStore }) {
+  const [busy, setBusy] = useState(false);
+  const clear = async (params: { sessionId?: string; tool?: string }) => {
+    setBusy(true);
+    try { await api.permission.clear(params); await store.refresh(); store.pushNotice("Permission grant revoked", "info"); }
+    catch (error) { store.pushNotice(cleanError(error), "error"); }
+    finally { setBusy(false); }
   };
-
-  const test = async (id: string) => {
-    setTesting(id);
-    try {
-      const result = await api.provider.test(id);
-      setTestResults((r) => ({ ...r, [id]: result }));
-    } catch (err) {
-      setTestResults((r) => ({ ...r, [id]: { ok: false, detail: cleanError(err) } }));
-    } finally {
-      setTesting(null);
-    }
-  };
-
-  const remove = async (id: string) => {
-    try {
-      await api.provider.delete(id);
-      await store.refresh();
-    } catch (err) {
-      store.pushNotice(cleanError(err), "error");
-    }
-  };
+  const grouped = store.grants.reduce((map, grant) => {
+    const key = `${grant.tool}:${grant.scope}:${grant.sessionId ?? ""}`;
+    map.set(key, grant);
+    return map;
+  }, new Map<string, PermissionGrant>());
 
   return (
-    <section className="settings-section">
-      <h2>Model providers</h2>
-      {store.providers.length === 0 && (
-        <p className="muted">
-          No providers yet. Add OpenAI, Anthropic, or any OpenAI-compatible endpoint (Ollama, vLLM, gateways).
-        </p>
-      )}
-      <div className="provider-cards">
-        {store.providers.map((p) => (
-          <div key={p.id} className="provider-card">
-            <div className="provider-head">
-              <strong>{p.label}</strong>
-              <span className="tag">{p.kind}</span>
-              {p.hasApiKey && <span className="tag">key</span>}
-            </div>
-            <div className="provider-base">{p.baseUrl ?? "default endpoint"}</div>
-            <div className="provider-models">{p.models.join(", ")}</div>
-            {testResults[p.id] && (
-              <div className={`provider-test ${testResults[p.id].ok ? "ok" : "fail"}`}>
-                {testResults[p.id].detail}
-              </div>
-            )}
-            <div className="provider-actions">
-              <button className="btn small" disabled={testing === p.id} onClick={() => void test(p.id)}>
-                {testing === p.id ? "Testing…" : "Test connection"}
-              </button>
-              <button className="btn small danger" onClick={() => void remove(p.id)}>
-                Delete
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      <div className="provider-form">
-        <h3>Add / update provider</h3>
-        <div className="form-grid">
-          <label>
-            Type
-            <select value={kind} onChange={(e) => setKind(e.target.value as ProviderKind)}>
-              <option value="openai">OpenAI-compatible</option>
-              <option value="anthropic">Anthropic</option>
-            </select>
-          </label>
-          <label>
-            Label
-            <input
-              value={label}
-              placeholder="e.g. Local Ollama"
-              onChange={(e) => setLabel(e.target.value)}
-            />
-          </label>
-          <label className="wide">
-            Base URL
-            <input
-              value={baseUrl}
-              placeholder={
-                kind === "openai" ? "https://api.openai.com/v1 (or http://127.0.0.1:11434/v1)" : "https://api.anthropic.com"
-              }
-              onChange={(e) => setBaseUrl(e.target.value)}
-            />
-          </label>
-          <label className="wide">
-            API key
-            <input
-              type="password"
-              value={apiKey}
-              placeholder="sk-… (leave blank to keep existing)"
-              onChange={(e) => setApiKey(e.target.value)}
-            />
-          </label>
-          <label className="wide">
-            Models <span className="muted">(comma separated)</span>
-            <input
-              value={models}
-              placeholder={kind === "openai" ? "gpt-4o, gpt-4o-mini" : "claude-sonnet-4-5, claude-haiku-4-5"}
-              onChange={(e) => setModels(e.target.value)}
-            />
-          </label>
+    <div className="settings-page-stack permissions-page">
+      <div className="permission-explainer"><span><SettingsIcon name="shield" size={19} /></span><div><strong>Privileged actions always start locked</strong><p>Read-only project tools run directly. File writes, commands, plugin tools, and MCP tools require your approval unless you create a standing grant.</p></div></div>
+      <section className="settings-block">
+        <div className="settings-block-heading"><div className="heading-with-count"><h2>Standing grants</h2><span>{grouped.size}</span></div>{grouped.size ? <button type="button" className="settings-ghost-btn danger" disabled={busy} onClick={() => void clear({})}>Revoke all</button> : null}</div>
+        <div className="settings-card permission-list">
+          {!grouped.size ? <EmptyState icon="shield" title="No standing grants" description="senastr will ask before every privileged tool call." /> : [...grouped.values()].map((grant) => <div className="permission-row" key={`${grant.tool}:${grant.scope}:${grant.sessionId ?? ""}`}><span className="permission-tool-icon"><SettingsIcon name={grant.tool.startsWith("mcp_") ? "server" : "terminal"} size={15} /></span><div><code>{grant.tool}</code><span>{grant.scope === "always" ? "Every session" : "Current session only"}</span></div><span className={`settings-badge ${grant.scope === "always" ? "warning" : ""}`}>{grant.scope}</span><button type="button" className="settings-ghost-btn compact" disabled={busy} onClick={() => void clear({ tool: grant.tool, sessionId: grant.sessionId ?? undefined })}>Revoke</button></div>)}
         </div>
-        <div className="form-actions">
-          <button className="btn primary" onClick={() => void save()}>
-            Save provider
-          </button>
-          <span className="muted">
-            Tip: empty API key + Ollama base URL works for local models. A provider with an existing id is
-            updated in place.
-          </span>
-        </div>
-      </div>
-    </section>
+      </section>
+      <div className="permission-footnote"><SettingsIcon name="info" size={14} /> Unanswered requests are denied automatically after 120 seconds. Grants can never bypass project-path confinement.</div>
+    </div>
   );
 }
 
-function PluginsSection({ store }: { store: SenastrStore }) {
-  const [dir, setDir] = useState("");
-  const install = async () => {
-    if (!dir.trim()) return;
-    try {
-      const info = await api.plugin.install(dir.trim());
-      await store.refresh();
-      setDir("");
-      store.pushNotice(`Plugin “${info.name}” installed`, "info");
-    } catch (err) {
-      store.pushNotice(cleanError(err), "error");
-    }
-  };
-  const uninstall = async (name: string) => {
-    try {
-      await api.plugin.uninstall(name);
-      await store.refresh();
-    } catch (err) {
-      store.pushNotice(cleanError(err), "error");
-    }
-  };
-
+function AboutSettings({ version, dataDir }: { version: string; dataDir: string }) {
   return (
-    <section className="settings-section">
-      <h2>Plugins</h2>
-      <p className="muted">
-        Plugins add tools to the agent. v0 plugins are declarative: a <code>senastr.plugin.json</code> manifest
-        with optional shell-command tools. Example: <code>examples/plugins/hello-senastr</code> in the repo.
-      </p>
-      {store.plugins.length > 0 && (
-        <div className="plugin-list">
-          {store.plugins.map((p) => (
-            <div key={p.name} className="plugin-row">
-              <div>
-                <strong>{p.name}</strong> <span className="muted">v{p.version}</span>
-                {p.description && <div className="muted">{p.description}</div>}
-                {p.tools.length > 0 && <div className="plugin-tools">tools: {p.tools.join(", ")}</div>}
-              </div>
-              <button className="btn small danger" onClick={() => void uninstall(p.name)}>
-                Uninstall
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-      <div className="plugin-install">
-        <input
-          value={dir}
-          placeholder="/path/to/plugin-folder (contains senastr.plugin.json)"
-          onChange={(e) => setDir(e.target.value)}
-        />
-        <button className="btn primary" onClick={() => void install()} disabled={!dir.trim()}>
-          Install
-        </button>
-      </div>
-    </section>
-  );
-}
-
-function GrantsSection({ store }: { store: SenastrStore }) {
-  const clear = async (p: { sessionId?: string; tool?: string }) => {
-    await api.permission.clear(p);
-    await store.refresh();
-  };
-  return (
-    <section className="settings-section">
-      <h2>Permission grants</h2>
-      {store.grants.length === 0 ? (
-        <p className="muted">No standing grants. write/exec tools ask each time until you allow them.</p>
-      ) : (
-        <table className="grants-table">
-          <thead>
-            <tr>
-              <th>Tool</th>
-              <th>Scope</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {store.grants.map((g, i) => (
-              <tr key={`${g.tool}-${g.sessionId ?? "always"}-${i}`}>
-                <td>{g.tool}</td>
-                <td>{g.scope === "always" ? "always" : "this session"}</td>
-                <td>
-                  <button className="btn small" onClick={() => void clear({ tool: g.tool })}>
-                    Revoke {g.tool}
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-      {store.grants.length > 0 && (
-        <button className="btn small" onClick={() => void clear({})}>
-          Clear all grants
-        </button>
-      )}
-    </section>
+    <div className="settings-page-stack about-settings-page">
+      <div className="about-hero"><div className="about-logo">s</div><div><h2>senastr</h2><p>The local-first workspace for AI coding agents.</p><span>Version {version || "0.1.0"}</span></div></div>
+      <section className="settings-block"><div className="settings-block-heading"><h2>Local data</h2></div><div className="settings-card about-rows"><div><span>Storage</span><code title={dataDir}>{dataDir || "Host-core data directory"}</code></div><div><span>Model traffic</span><strong>Direct to your configured provider</strong></div><div><span>Project access</span><strong>Confined to the opened project</strong></div><div><span>Credentials</span><strong>Owned by host-core, never exposed to chat</strong></div></div></section>
+      <section className="settings-block"><div className="settings-block-heading"><h2>Agent capabilities</h2></div><div className="about-capability-grid"><div><SettingsIcon name="sparkles" size={18} /><strong>Model agnostic</strong><span>OpenAI, Anthropic, Gemini, compatible and local endpoints</span></div><div><SettingsIcon name="book" size={18} /><strong>Skills</strong><span>Reusable global or project instructions</span></div><div><SettingsIcon name="server" size={18} /><strong>MCP</strong><span>Lazy local and HTTP tool connections</span></div><div><SettingsIcon name="shield" size={18} /><strong>Permission gated</strong><span>You approve every privileged capability</span></div></div></section>
+      <p className="about-reference">From-scratch implementation inspired by the open architecture of PI-Desktop.</p>
+    </div>
   );
 }

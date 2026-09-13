@@ -2,13 +2,29 @@ import { join } from "node:path";
 import {
   ErrorCodes,
   RpcError,
+  type ProviderApiStyle,
   type ProviderConfig,
+  type ProviderDiscoveryInput,
+  type ProviderKind,
   type ProviderSummary,
   type ProviderTestResult,
 } from "@senastr/shared";
 import { JsonFileStore } from "./store";
 
 const TEST_TIMEOUT_MS = 10_000;
+const MAX_MODELS = 500;
+export const MASKED_PROVIDER_SECRET = "••••••";
+const RESERVED_HEADERS = new Set([
+  "authorization",
+  "proxy-authorization",
+  "x-api-key",
+  "api-key",
+  "host",
+  "content-length",
+  "cookie",
+  "set-cookie",
+  "connection",
+]);
 
 /**
  * Model provider registry. Credentials live only in the host-core data dir
@@ -28,11 +44,21 @@ export class ProviderStore {
   get(id: string): ProviderConfig {
     const found = this.store.get().find((p) => p.id === id);
     if (!found) throw new RpcError(ErrorCodes.PROVIDER_NOT_FOUND, `provider not found: ${id}`);
-    return found;
+    return normalizeStoredProvider(found);
   }
 
   set(config: ProviderConfig): ProviderSummary {
-    const cfg = validateProvider(config);
+    const existing = this.store.get().find((provider) => provider.id === config?.id);
+    // Omitted or masked values in an edit mean "keep the stored secret". Do
+    // the merge in host-core so credentials never need to return to a client.
+    const merged = existing
+      ? {
+          ...config,
+          apiKey: config.apiKey && config.apiKey !== MASKED_PROVIDER_SECRET ? config.apiKey : existing.apiKey,
+          headers: mergeMaskedHeaders(config.headers, existing.headers),
+        }
+      : config;
+    const cfg = validateProvider(merged);
     this.store.update((all) => {
       const idx = all.findIndex((p) => p.id === cfg.id);
       if (idx >= 0) {
@@ -51,42 +77,37 @@ export class ProviderStore {
     this.store.update((all) => all.filter((p) => p.id !== id));
   }
 
-  /** Best-effort connectivity probe against the endpoint's model list. */
-  async test(id: string): Promise<ProviderTestResult> {
-    const cfg = this.get(id);
+  /** Discover models from an unsaved setup-dialog connection. */
+  async discover(input: ProviderDiscoveryInput): Promise<ProviderTestResult> {
+    const existing = input?.id ? this.store.get().find((provider) => provider.id === input.id) : undefined;
+    const draft = existing
+      ? {
+          ...input,
+          apiKey: input.apiKey && input.apiKey !== MASKED_PROVIDER_SECRET ? input.apiKey : existing.apiKey,
+          headers: mergeMaskedHeaders(input.headers, existing.headers),
+        }
+      : input;
+    const normalized = normalizeDiscoveryInput(draft);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TEST_TIMEOUT_MS);
     try {
-      if (cfg.kind === "openai") {
-        const base = (cfg.baseUrl ?? "https://api.openai.com/v1").replace(/\/+$/, "");
-        const res = await fetch(`${base}/models`, {
-          headers: cfg.apiKey ? { authorization: `Bearer ${cfg.apiKey}` } : {},
-          signal: controller.signal,
-        });
-        if (!res.ok) return { ok: false, detail: `HTTP ${res.status} ${res.statusText}`.trim() };
-        const data: any = await res.json();
-        const models = Array.isArray(data?.data)
-          ? data.data.map((m: any) => (typeof m?.id === "string" ? m.id : "")).filter(Boolean)
-          : [];
-        return { ok: true, detail: `connected — ${models.length} models reported`, models: models.slice(0, 500) };
+      const request = modelListRequest(normalized);
+      const res = await fetch(request.url, { headers: request.headers, signal: controller.signal });
+      if (!res.ok) {
+        return { ok: false, detail: friendlyHttpError(res.status, res.statusText) };
       }
-      const base = (cfg.baseUrl ?? "https://api.anthropic.com").replace(/\/+$/, "");
-      const res = await fetch(`${base}/v1/models`, {
-        headers: {
-          "x-api-key": cfg.apiKey ?? "",
-          "anthropic-version": "2023-06-01",
-        },
-        signal: controller.signal,
-      });
-      if (!res.ok) return { ok: false, detail: `HTTP ${res.status} ${res.statusText}`.trim() };
-      const data: any = await res.json();
-      const models = Array.isArray(data?.data)
-        ? data.data.map((m: any) => (typeof m?.id === "string" ? m.id : "")).filter(Boolean)
-        : [];
-      return { ok: true, detail: `connected — ${models.length} models reported`, models: models.slice(0, 500) };
+      const body = await res.json();
+      const models = normalizeModelList(normalized.apiStyle, body);
+      return {
+        ok: true,
+        detail: models.length
+          ? `connected — ${models.length} model${models.length === 1 ? "" : "s"} reported`
+          : "connected — the endpoint returned no models",
+        models,
+      };
     } catch (err) {
       const reason = controller.signal.aborted
-        ? `timed out after ${TEST_TIMEOUT_MS}ms`
+        ? `timed out after ${TEST_TIMEOUT_MS / 1000}s`
         : err instanceof Error
           ? err.message
           : String(err);
@@ -95,17 +116,50 @@ export class ProviderStore {
       clearTimeout(timer);
     }
   }
+
+  /** Best-effort connectivity probe against the endpoint's model list. */
+  async test(id: string): Promise<ProviderTestResult> {
+    const cfg = this.get(id);
+    return this.discover(cfg);
+  }
+}
+
+export function defaultApiStyle(kind: ProviderKind): ProviderApiStyle {
+  if (kind === "anthropic") return "anthropic_messages";
+  if (kind === "google") return "google_generative_ai";
+  return "chat_completions";
+}
+
+export function defaultBaseUrl(kind: ProviderKind): string {
+  if (kind === "anthropic") return "https://api.anthropic.com";
+  if (kind === "google") return "https://generativelanguage.googleapis.com/v1beta";
+  return "https://api.openai.com/v1";
 }
 
 export function maskProvider(cfg: ProviderConfig): ProviderSummary {
+  const normalized = normalizeStoredProvider(cfg);
   return {
-    id: cfg.id,
-    kind: cfg.kind,
-    label: cfg.label,
-    baseUrl: cfg.baseUrl,
-    hasApiKey: Boolean(cfg.apiKey),
-    models: cfg.models,
-    defaultModel: cfg.defaultModel,
+    id: normalized.id,
+    kind: normalized.kind,
+    vendorKey: normalized.vendorKey,
+    label: normalized.label,
+    baseUrl: normalized.baseUrl,
+    hasApiKey: Boolean(normalized.apiKey),
+    apiStyle: normalized.apiStyle ?? defaultApiStyle(normalized.kind),
+    headers: normalized.headers
+      ? Object.fromEntries(Object.keys(normalized.headers).map((name) => [name, MASKED_PROVIDER_SECRET]))
+      : undefined,
+    models: normalized.models,
+    defaultModel: normalized.defaultModel,
+    enabled: normalized.enabled !== false,
+  };
+}
+
+function normalizeStoredProvider(cfg: ProviderConfig): ProviderConfig {
+  return {
+    ...cfg,
+    enabled: cfg.enabled !== false,
+    apiStyle: cfg.apiStyle ?? defaultApiStyle(cfg.kind),
   };
 }
 
@@ -114,8 +168,11 @@ export function validateProvider(cfg: unknown): ProviderConfig {
   if (!c || typeof c.id !== "string" || !/^[a-z0-9][a-z0-9_-]*$/.test(c.id)) {
     throw new RpcError(ErrorCodes.INVALID_PARAMS, "provider.id must be a slug (a-z, 0-9, -, _)");
   }
-  if (c.kind !== "openai" && c.kind !== "anthropic") {
-    throw new RpcError(ErrorCodes.INVALID_PARAMS, `provider.kind must be "openai" or "anthropic", got: ${String(c.kind)}`);
+  if (c.kind !== "openai" && c.kind !== "anthropic" && c.kind !== "google") {
+    throw new RpcError(
+      ErrorCodes.INVALID_PARAMS,
+      `provider.kind must be "openai", "anthropic", or "google", got: ${String(c.kind)}`,
+    );
   }
   if (typeof c.label !== "string" || !c.label.trim()) {
     throw new RpcError(ErrorCodes.INVALID_PARAMS, "provider.label is required");
@@ -123,13 +180,154 @@ export function validateProvider(cfg: unknown): ProviderConfig {
   if (!Array.isArray(c.models) || c.models.some((m) => typeof m !== "string")) {
     throw new RpcError(ErrorCodes.INVALID_PARAMS, "provider.models must be an array of model ids");
   }
+  const models = [...new Set(c.models.map((model) => model.trim()).filter(Boolean))];
+  if (models.length === 0) {
+    throw new RpcError(ErrorCodes.INVALID_PARAMS, "select or add at least one model");
+  }
+  const apiStyle = normalizeApiStyle(c.apiStyle, c.kind);
+  const baseUrl = typeof c.baseUrl === "string" && c.baseUrl.trim() ? c.baseUrl.trim().replace(/\/+$/, "") : undefined;
+  if (baseUrl) validateUrl(baseUrl, "provider.baseUrl");
+  const headers = sanitizeHeaders(c.headers);
   return {
     id: c.id,
     kind: c.kind,
+    vendorKey: typeof c.vendorKey === "string" && c.vendorKey.trim() ? c.vendorKey.trim() : undefined,
     label: c.label.trim(),
-    baseUrl: typeof c.baseUrl === "string" && c.baseUrl.trim() ? c.baseUrl.trim() : undefined,
+    baseUrl,
     apiKey: typeof c.apiKey === "string" && c.apiKey.trim() ? c.apiKey.trim() : undefined,
-    models: c.models,
-    defaultModel: typeof c.defaultModel === "string" ? c.defaultModel : c.models[0],
+    apiStyle,
+    headers: Object.keys(headers).length ? headers : undefined,
+    models,
+    defaultModel:
+      typeof c.defaultModel === "string" && models.includes(c.defaultModel.trim())
+        ? c.defaultModel.trim()
+        : models[0],
+    enabled: c.enabled !== false,
   };
+}
+
+function normalizeDiscoveryInput(input: ProviderDiscoveryInput): Required<Pick<ProviderDiscoveryInput, "kind" | "apiStyle">> & ProviderDiscoveryInput {
+  const kind = input?.kind;
+  if (kind !== "openai" && kind !== "anthropic" && kind !== "google") {
+    throw new RpcError(ErrorCodes.INVALID_PARAMS, "a valid provider kind is required");
+  }
+  const baseUrl = (input.baseUrl?.trim() || defaultBaseUrl(kind)).replace(/\/+$/, "");
+  validateUrl(baseUrl, "base URL");
+  return {
+    kind,
+    baseUrl,
+    apiKey: input.apiKey?.trim() || undefined,
+    apiStyle: normalizeApiStyle(input.apiStyle, kind),
+    headers: sanitizeHeaders(input.headers),
+  };
+}
+
+function normalizeApiStyle(value: ProviderApiStyle | undefined, kind: ProviderKind): ProviderApiStyle {
+  const style = value ?? defaultApiStyle(kind);
+  const valid: ProviderApiStyle[] = [
+    "chat_completions",
+    "responses",
+    "anthropic_messages",
+    "google_generative_ai",
+  ];
+  if (!valid.includes(style)) {
+    throw new RpcError(ErrorCodes.INVALID_PARAMS, `unsupported API format: ${String(style)}`);
+  }
+  return style;
+}
+
+function validateUrl(value: string, label: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new RpcError(ErrorCodes.INVALID_PARAMS, `${label} must be a valid URL`);
+  }
+  if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || !parsed.hostname || parsed.username || parsed.password) {
+    throw new RpcError(ErrorCodes.INVALID_PARAMS, `${label} must be an HTTP(S) URL without embedded credentials`);
+  }
+}
+
+function mergeMaskedHeaders(
+  next: Record<string, string> | undefined,
+  previous: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+  if (!next) return next;
+  const merged = Object.fromEntries(
+    Object.entries(next).flatMap(([name, value]) => {
+      if (value !== MASKED_PROVIDER_SECRET) return [[name, value]];
+      return previous?.[name] === undefined ? [] : [[name, previous[name]]];
+    }),
+  );
+  return merged;
+}
+
+export function sanitizeHeaders(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const out: Record<string, string> = {};
+  for (const [rawName, rawValue] of Object.entries(value as Record<string, unknown>)) {
+    const name = rawName.trim();
+    const headerValue = typeof rawValue === "string" ? rawValue.trim() : "";
+    if (!name || !headerValue) continue;
+    if (name.includes("\r") || name.includes("\n") || headerValue.includes("\r") || headerValue.includes("\n")) {
+      throw new RpcError(ErrorCodes.INVALID_PARAMS, "provider headers cannot contain line breaks");
+    }
+    if (RESERVED_HEADERS.has(name.toLowerCase())) {
+      throw new RpcError(ErrorCodes.INVALID_PARAMS, `provider header is managed by senastr: ${name}`);
+    }
+    out[name] = headerValue;
+  }
+  return out;
+}
+
+function authHeaders(input: ProviderDiscoveryInput & { kind: ProviderKind; apiStyle: ProviderApiStyle }): Record<string, string> {
+  const headers: Record<string, string> = {};
+  if (input.apiStyle === "anthropic_messages") {
+    if (input.apiKey) headers["x-api-key"] = input.apiKey;
+    headers["anthropic-version"] = "2023-06-01";
+  } else if (input.apiStyle !== "google_generative_ai" && input.apiKey) {
+    headers.authorization = `Bearer ${input.apiKey}`;
+  }
+  return { ...headers, ...sanitizeHeaders(input.headers) };
+}
+
+export function modelListRequest(input: ProviderDiscoveryInput & { kind: ProviderKind; apiStyle: ProviderApiStyle }): {
+  url: string;
+  headers: Record<string, string>;
+} {
+  const base = (input.baseUrl || defaultBaseUrl(input.kind)).replace(/\/+$/, "");
+  if (input.apiStyle === "google_generative_ai") {
+    const params = new URLSearchParams({ pageSize: "1000" });
+    if (input.apiKey) params.set("key", input.apiKey);
+    return { url: `${base}/models?${params.toString()}`, headers: authHeaders(input) };
+  }
+  if (input.apiStyle === "anthropic_messages") {
+    const root = base.endsWith("/v1") ? base : `${base}/v1`;
+    return { url: `${root}/models?limit=1000`, headers: authHeaders(input) };
+  }
+  return { url: `${base}/models`, headers: authHeaders(input) };
+}
+
+export function normalizeModelList(style: ProviderApiStyle, value: unknown): string[] {
+  const record = value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+  const rows = style === "google_generative_ai"
+    ? (Array.isArray(record.models) ? record.models : [])
+    : (Array.isArray(record.data) ? record.data : Array.isArray(value) ? value : []);
+  const ids = rows.flatMap((row) => {
+    if (!row || typeof row !== "object" || Array.isArray(row)) return [];
+    const item = row as Record<string, unknown>;
+    const raw = style === "google_generative_ai" ? item.name : item.id;
+    if (typeof raw !== "string" || !raw.trim()) return [];
+    return [style === "google_generative_ai" ? raw.replace(/^models\//, "") : raw.trim()];
+  });
+  return [...new Set(ids)].sort((left, right) => left.localeCompare(right)).slice(0, MAX_MODELS);
+}
+
+function friendlyHttpError(status: number, statusText: string): string {
+  if (status === 401 || status === 403) return `authentication failed (HTTP ${status})`;
+  if (status === 404) return "model-list endpoint not found (HTTP 404)";
+  if (status === 429) return "provider rate limit reached (HTTP 429)";
+  return `HTTP ${status}${statusText ? ` ${statusText}` : ""}`;
 }

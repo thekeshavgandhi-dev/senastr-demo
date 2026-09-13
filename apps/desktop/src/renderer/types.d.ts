@@ -1,13 +1,20 @@
 import type {
   AgentEvent,
+  CapabilityLevel,
   GrantScope,
+  McpServerInput,
+  McpServerStatus,
+  McpServerSummary,
   PermissionGrant,
   PermissionRequest,
   PluginInfo,
   ProviderConfig,
+  ProviderDiscoveryInput,
   ProviderSummary,
   ProviderTestResult,
   Session,
+  SkillInput,
+  SkillRecord,
   SessionMeta,
 } from "@senastr/shared";
 
@@ -23,6 +30,7 @@ export type SenastrEvent =
 export interface SenastrApi {
   app: {
     version(): Promise<string>;
+    dataDir(): Promise<string>;
   };
   project: {
     open(): Promise<string | null>;
@@ -40,6 +48,33 @@ export interface SenastrApi {
     set(provider: ProviderConfig): Promise<ProviderSummary>;
     delete(id: string): Promise<{ ok: boolean }>;
     test(id: string): Promise<ProviderTestResult>;
+    discoverModels(input: ProviderDiscoveryInput): Promise<ProviderTestResult>;
+  };
+  skill: {
+    list(query?: { level?: CapabilityLevel; projectPath?: string }): Promise<SkillRecord[]>;
+    set(skill: SkillInput): Promise<SkillRecord>;
+    delete(params: { id: string; level?: CapabilityLevel; projectPath?: string }): Promise<{ ok: boolean }>;
+    setEnabled(params: {
+      id: string;
+      enabled: boolean;
+      level?: CapabilityLevel;
+      projectPath?: string;
+    }): Promise<SkillRecord>;
+  };
+  mcp: {
+    list(query?: { level?: CapabilityLevel; projectPath?: string }): Promise<{
+      servers: McpServerSummary[];
+      statuses: McpServerStatus[];
+    }>;
+    set(server: McpServerInput): Promise<McpServerSummary>;
+    delete(params: { id: string; level?: CapabilityLevel; projectPath?: string }): Promise<{ ok: boolean }>;
+    setEnabled(params: {
+      id: string;
+      enabled: boolean;
+      level?: CapabilityLevel;
+      projectPath?: string;
+    }): Promise<McpServerSummary>;
+    test(params: { id: string; level?: CapabilityLevel; projectPath?: string }): Promise<McpServerStatus>;
   };
   permission: {
     list(): Promise<PermissionGrant[]>;
@@ -48,8 +83,10 @@ export interface SenastrApi {
   };
   plugin: {
     list(): Promise<PluginInfo[]>;
+    pickDirectory(): Promise<string | null>;
     install(dir: string): Promise<PluginInfo>;
     uninstall(name: string): Promise<{ ok: boolean }>;
+    setEnabled(name: string, enabled: boolean): Promise<PluginInfo>;
   };
   chat: {
     send(params: { sessionId: string; text: string; modelRef: SenastrModelRef }): Promise<{ ok: boolean }>;

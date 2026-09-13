@@ -74,7 +74,7 @@ export function ChatView({ store }: { store: SenastrStore }) {
   }
 
   const options = modelOptions(providers);
-  const canSend = Boolean(activeSession.projectPath) && providers.length > 0 && !busy;
+  const canSend = Boolean(activeSession.projectPath) && options.length > 0 && !busy;
 
   return (
     <div className="chat">
@@ -129,8 +129,8 @@ export function ChatView({ store }: { store: SenastrStore }) {
         busy={busy}
         canSend={canSend}
         hint={
-          providers.length === 0
-            ? "Add a model provider in Settings to start chatting"
+          options.length === 0
+            ? "Add or enable a model provider in Settings to start chatting"
             : !activeSession.projectPath
               ? "Open a project folder to get started"
               : undefined

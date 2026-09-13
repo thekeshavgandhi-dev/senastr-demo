@@ -2,6 +2,7 @@ import { BUILTIN_TOOLS, ErrorCodes, RpcError, type ToolDefinition, type ToolResu
 import type { PermissionService } from "../permissions";
 import type { SessionStore } from "../sessions";
 import type { PluginService } from "../plugins";
+import type { McpService } from "../mcp";
 import { listDirTool, readFileTool, resolveProjectPath, writeFileTool } from "./fs";
 import { runShell } from "./shell";
 
@@ -14,33 +15,38 @@ export interface ToolRunParams {
 /**
  * Executes agent tool calls against the project.
  *
- * Flow per call (ADR 0005):
- *   1. resolve the session's project root (tools are project-confined)
- *   2. look up the tool (builtin or plugin-declared)
- *   3. risk "read" → execute; otherwise require a grant, else block on an
- *      interactive permission request (120s timeout → deny)
- *   4. execute and return a ToolResult (never throw across the wire)
+ * Builtins, enabled plugin tools, and tools discovered from active MCP servers
+ * all travel through the same project lookup and permission gateway.
  */
 export class ToolRunner {
   constructor(
     private readonly sessions: SessionStore,
     private readonly permissions: PermissionService,
     private readonly plugins: PluginService,
+    private readonly mcp?: McpService,
   ) {}
 
-  listTools(): ToolDefinition[] {
-    const pluginTools: ToolDefinition[] = this.plugins.list().flatMap((p) => {
-      const manifest = this.plugins.readManifest(p.name);
-      return (manifest?.tools ?? []).map<ToolDefinition>((t) => ({
-        name: t.name,
-        description: `[${p.name}] ${t.description}`,
-        parameters: t.args ?? { type: "object", properties: {} },
-        risk: "exec",
-        source: "plugin",
-        plugin: p.name,
-      }));
-    });
-    return [...BUILTIN_TOOLS, ...pluginTools];
+  async listTools(sessionId?: string): Promise<ToolDefinition[]> {
+    const pluginTools: ToolDefinition[] = this.plugins
+      .list()
+      .filter((plugin) => plugin.enabled)
+      .flatMap((plugin) => {
+        const manifest = this.plugins.readManifest(plugin.name);
+        return (manifest?.tools ?? []).map<ToolDefinition>((tool) => ({
+          name: tool.name,
+          description: `[${plugin.name}] ${tool.description}`,
+          parameters: tool.args ?? { type: "object", properties: {} },
+          risk: "exec",
+          source: "plugin",
+          plugin: plugin.name,
+        }));
+      });
+    let mcpTools: ToolDefinition[] = [];
+    if (this.mcp && sessionId) {
+      const session = this.sessions.get(sessionId);
+      mcpTools = await this.mcp.listToolDefinitions(session.projectPath);
+    }
+    return [...BUILTIN_TOOLS, ...pluginTools, ...mcpTools];
   }
 
   async run(params: ToolRunParams): Promise<ToolResult> {
@@ -54,24 +60,22 @@ export class ToolRunner {
     try {
       const session = this.sessions.get(params.sessionId);
       const project = resolveProjectPath(session.projectPath);
-      const tool = this.listTools().find((t) => t.name === params.tool);
-      if (!tool) {
-        return finish(false, { error: `unknown tool: ${params.tool}` });
-      }
+      const tool = (await this.listTools(params.sessionId)).find((candidate) => candidate.name === params.tool);
+      if (!tool) return finish(false, { error: `unknown tool: ${params.tool}` });
 
       if (tool.risk !== "read" && !this.permissions.hasGrant(session.id, tool.name)) {
-        const summary = this.summarize(tool.name, params.args);
         const decision = await this.permissions.request({
           sessionId: session.id,
           tool: tool.name,
           args: params.args,
-          summary,
+          summary: this.summarize(tool, params.args),
         });
         if (!decision.allowed) {
-          const error = decision.timedOut
-            ? `permission request timed out after 120s — denied`
-            : "permission denied by user";
-          return finish(false, { error });
+          return finish(false, {
+            error: decision.timedOut
+              ? "permission request timed out after 120s — denied"
+              : "permission denied by user",
+          });
         }
       }
 
@@ -98,6 +102,9 @@ export class ToolRunner {
       case "run_command":
         return (await runShell(project, args)).output;
       default: {
+        if (tool.source === "mcp" && this.mcp) {
+          return this.mcp.callTool(tool.name, args, project);
+        }
         if (tool.source !== "plugin" || !tool.plugin) {
           throw new RpcError(ErrorCodes.TOOL_NOT_FOUND, `tool not executable: ${tool.name}`);
         }
@@ -109,14 +116,15 @@ export class ToolRunner {
     }
   }
 
-  private summarize(tool: string, args: Record<string, unknown>): string {
+  private summarize(tool: ToolDefinition, args: Record<string, unknown>): string {
+    if (tool.source === "mcp") return `${tool.description} → ${JSON.stringify(args).slice(0, 100)}`;
     const path = typeof args.path === "string" ? args.path : undefined;
     const command = typeof args.command === "string" ? args.command : undefined;
     const content = typeof args.content === "string" ? args.content : undefined;
-    if (path) return `${tool} → ${path}`;
-    if (command) return `${tool} → ${command.slice(0, 120)}`;
-    if (content !== undefined) return `${tool} → ${content.length} characters`;
-    return `${tool} ${JSON.stringify(args).slice(0, 120)}`;
+    if (path) return `${tool.name} → ${path}`;
+    if (command) return `${tool.name} → ${command.slice(0, 120)}`;
+    if (content !== undefined) return `${tool.name} → ${content.length} characters`;
+    return `${tool.name} ${JSON.stringify(args).slice(0, 120)}`;
   }
 }
 

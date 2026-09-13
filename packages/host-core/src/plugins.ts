@@ -23,6 +23,8 @@ interface InstalledPlugin {
   version: string;
   installedAt: number;
   path: string;
+  /** Missing on v0 registries; those installations remain enabled. */
+  enabled?: boolean;
 }
 
 /**
@@ -53,7 +55,10 @@ export class PluginService {
         name,
         version: manifest?.version ?? meta.version,
         description: manifest?.description,
+        author: manifest?.author,
         tools: (manifest?.tools ?? []).map((t) => t.name),
+        permissions: manifest?.permissions,
+        enabled: meta.enabled !== false,
         installedAt: meta.installedAt,
       };
     });
@@ -66,6 +71,7 @@ export class PluginService {
 
   findTool(toolName: string): { def: PluginToolDef; plugin: string } | null {
     for (const info of this.list()) {
+      if (!info.enabled) continue;
       const manifest = this.readManifest(info.name);
       const def = manifest?.tools?.find((t) => t.name === toolName);
       if (def) return { def, plugin: info.name };
@@ -93,17 +99,34 @@ export class PluginService {
     });
 
     const installedAt = Date.now();
+    const previous = this.installed.get()[manifest.name];
+    const enabled = previous?.enabled !== false;
     this.installed.update((all) => ({
       ...all,
-      [manifest.name]: { version: manifest.version, installedAt, path: dest },
+      [manifest.name]: { version: manifest.version, installedAt, path: dest, enabled },
     }));
     return {
       name: manifest.name,
       version: manifest.version,
       description: manifest.description,
+      author: manifest.author,
       tools: (manifest.tools ?? []).map((t) => t.name),
+      permissions: manifest.permissions,
+      enabled,
       installedAt,
     };
+  }
+
+  setEnabled(name: string, enabled: boolean): PluginInfo {
+    const meta = this.installed.get()[name];
+    if (!meta) throw new RpcError(ErrorCodes.PLUGIN_INVALID, `plugin not installed: ${name}`);
+    this.installed.update((all) => ({
+      ...all,
+      [name]: { ...all[name], enabled },
+    }));
+    const info = this.list().find((plugin) => plugin.name === name);
+    if (!info) throw new RpcError(ErrorCodes.PLUGIN_INVALID, `plugin not installed: ${name}`);
+    return info;
   }
 
   uninstall(name: string): void {

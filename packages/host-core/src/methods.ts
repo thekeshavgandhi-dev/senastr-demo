@@ -6,8 +6,11 @@ import {
   RpcError,
   SENASTR_VERSION,
   type GrantScope,
+  type McpServerInput,
   type ProviderConfig,
+  type ProviderDiscoveryInput,
   type Session,
+  type SkillInput,
 } from "@senastr/shared";
 import type { RpcServer } from "./server";
 import type { SessionStore } from "./sessions";
@@ -15,6 +18,8 @@ import type { ProviderStore } from "./providers";
 import type { PermissionService } from "./permissions";
 import type { ToolRunner } from "./tools/runner";
 import type { PluginService } from "./plugins";
+import type { SkillService } from "./skills";
+import type { McpService } from "./mcp";
 
 export interface MethodContext {
   server: RpcServer;
@@ -24,6 +29,8 @@ export interface MethodContext {
   permissions: PermissionService;
   tools: ToolRunner;
   plugins: PluginService;
+  skills: SkillService;
+  mcp: McpService;
 }
 
 /**
@@ -32,7 +39,7 @@ export interface MethodContext {
  * matter who is on the other end (desktop, demo script, tests).
  */
 export function registerMethods(ctx: MethodContext): void {
-  const { server, sessions, providers, permissions, tools, plugins } = ctx;
+  const { server, sessions, providers, permissions, tools, plugins, skills, mcp } = ctx;
 
   // --- host -----------------------------------------------------------------
   server.onMethod(Methods.hostPing, () => ({
@@ -42,7 +49,9 @@ export function registerMethods(ctx: MethodContext): void {
     dataDir: ctx.dataDir,
   }));
 
-  server.onMethod(Methods.hostToolsList, () => tools.listTools());
+  server.onMethod(Methods.hostToolsList, (params?: { sessionId?: string }) =>
+    tools.listTools(typeof params?.sessionId === "string" ? params.sessionId : undefined),
+  );
 
   // --- sessions ---------------------------------------------------------------
   server.onMethod(Methods.sessionList, () => sessions.list());
@@ -107,6 +116,70 @@ export function registerMethods(ctx: MethodContext): void {
     return providers.test(id);
   });
 
+  server.onMethod(Methods.providerDiscoverModels, (params: { input: ProviderDiscoveryInput }) => {
+    if (!params?.input) throw new RpcError(ErrorCodes.INVALID_PARAMS, "provider connection is required");
+    return providers.discover(params.input);
+  });
+
+  // --- skills ----------------------------------------------------------------
+  server.onMethod(Methods.skillList, (params?: { level?: "global" | "project"; projectPath?: string }) =>
+    skills.list(params ?? {}),
+  );
+  server.onMethod(Methods.skillActive, (params?: { projectPath?: string | null }) =>
+    skills.active(params?.projectPath),
+  );
+  server.onMethod(Methods.skillSet, (params: { skill: SkillInput }) => {
+    if (!params?.skill) throw new RpcError(ErrorCodes.INVALID_PARAMS, "skill is required");
+    return skills.set(params.skill);
+  });
+  server.onMethod(
+    Methods.skillSetEnabled,
+    (params: { id: string; enabled: boolean; level?: "global" | "project"; projectPath?: string }) => {
+      const id = requireString(params, "id");
+      return skills.setEnabled(id, Boolean(params.enabled), params);
+    },
+  );
+  server.onMethod(
+    Methods.skillDelete,
+    (params: { id: string; level?: "global" | "project"; projectPath?: string }) => {
+      const id = requireString(params, "id");
+      skills.delete(id, params);
+      return { ok: true };
+    },
+  );
+
+  // --- MCP -------------------------------------------------------------------
+  server.onMethod(Methods.mcpList, (params?: { level?: "global" | "project"; projectPath?: string }) => ({
+    servers: mcp.list(params ?? {}),
+    statuses: mcp.listStatuses(params ?? {}),
+  }));
+  server.onMethod(Methods.mcpSet, (params: { server: McpServerInput }) => {
+    if (!params?.server) throw new RpcError(ErrorCodes.INVALID_PARAMS, "MCP server is required");
+    return mcp.set(params.server);
+  });
+  server.onMethod(
+    Methods.mcpSetEnabled,
+    (params: { id: string; enabled: boolean; level?: "global" | "project"; projectPath?: string }) => {
+      const id = requireString(params, "id");
+      return mcp.setEnabled(id, Boolean(params.enabled), params);
+    },
+  );
+  server.onMethod(
+    Methods.mcpDelete,
+    (params: { id: string; level?: "global" | "project"; projectPath?: string }) => {
+      const id = requireString(params, "id");
+      mcp.delete(id, params);
+      return { ok: true };
+    },
+  );
+  server.onMethod(
+    Methods.mcpTest,
+    (params: { id: string; level?: "global" | "project"; projectPath?: string }) => {
+      const id = requireString(params, "id");
+      return mcp.test(id, params);
+    },
+  );
+
   // --- tools & permissions -----------------------------------------------------
   server.onMethod(Methods.toolRun, (params: { sessionId: string; tool: string; args: Record<string, unknown> }) => {
     const sessionId = requireString(params, "sessionId");
@@ -149,6 +222,11 @@ export function registerMethods(ctx: MethodContext): void {
     const name = requireString(params, "name");
     plugins.uninstall(name);
     return { ok: true };
+  });
+
+  server.onMethod(Methods.pluginSetEnabled, (params: { name: string; enabled: boolean }) => {
+    const name = requireString(params, "name");
+    return plugins.setEnabled(name, Boolean(params.enabled));
   });
 }
 

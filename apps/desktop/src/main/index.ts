@@ -8,6 +8,8 @@ import {
   type ModelRef,
   type PermissionRequest,
   type ProviderConfig,
+  type ProviderDiscoveryInput,
+  type SkillRecord,
   type Session,
   type ToolDefinition,
   type ToolResult,
@@ -29,6 +31,7 @@ import {
 let win: BrowserWindow | null = null;
 let host: NdjsonRpcClient | null = null;
 let runtime: AgentRuntime | null = null;
+let hostDataDir = "";
 let hostRestarts = 0;
 let shuttingDown = false;
 
@@ -64,8 +67,12 @@ class RpcHostBridge implements HostBridge {
     return this.client.request(Methods.sessionAppendMessages, { id, messages }, { timeoutMs: 10_000 });
   }
 
-  listTools() {
-    return this.client.request<ToolDefinition[]>(Methods.hostToolsList);
+  listTools(sessionId?: string) {
+    return this.client.request<ToolDefinition[]>(Methods.hostToolsList, { sessionId });
+  }
+
+  listSkills(projectPath?: string | null) {
+    return this.client.request<SkillRecord[]>(Methods.skillActive, { projectPath });
   }
 
   runTool(req: { sessionId: string; tool: string; args: Record<string, unknown> }) {
@@ -110,7 +117,8 @@ async function startHost(): Promise<NdjsonRpcClient> {
       }
     },
   });
-  const ping = await client.request(Methods.hostPing, {}, { timeoutMs: 10_000 });
+  const ping = await client.request<{ dataDir?: string }>(Methods.hostPing, {}, { timeoutMs: 10_000 });
+  hostDataDir = ping.dataDir ?? dataDir;
   log("host-core ready:", ping);
   return client;
 }
@@ -122,6 +130,7 @@ function setupIpc(): void {
   };
 
   ipcMain.handle("app/version", () => app.getVersion());
+  ipcMain.handle("app/data-dir", () => hostDataDir);
   ipcMain.handle("project/open", async () => {
     if (!win) return null;
     const r = await dialog.showOpenDialog(win, {
@@ -144,6 +153,20 @@ function setupIpc(): void {
   ipcMain.handle("provider/set", (_e, p: { provider: ProviderConfig }) => req(Methods.providerSet, p));
   ipcMain.handle("provider/delete", (_e, p: { id: string }) => req(Methods.providerDelete, p));
   ipcMain.handle("provider/test", (_e, p: { id: string }) => req(Methods.providerTest, p, 20_000));
+  ipcMain.handle("provider/discover-models", (_e, p: { input: ProviderDiscoveryInput }) =>
+    req(Methods.providerDiscoverModels, p, 20_000),
+  );
+
+  ipcMain.handle("skill/list", (_e, p) => req(Methods.skillList, p ?? {}));
+  ipcMain.handle("skill/set", (_e, p) => req(Methods.skillSet, p));
+  ipcMain.handle("skill/delete", (_e, p) => req(Methods.skillDelete, p));
+  ipcMain.handle("skill/set-enabled", (_e, p) => req(Methods.skillSetEnabled, p));
+
+  ipcMain.handle("mcp/list", (_e, p) => req(Methods.mcpList, p ?? {}));
+  ipcMain.handle("mcp/set", (_e, p) => req(Methods.mcpSet, p));
+  ipcMain.handle("mcp/delete", (_e, p) => req(Methods.mcpDelete, p));
+  ipcMain.handle("mcp/set-enabled", (_e, p) => req(Methods.mcpSetEnabled, p));
+  ipcMain.handle("mcp/test", (_e, p) => req(Methods.mcpTest, p, 30_000));
 
   ipcMain.handle("permission/list", () => req(Methods.permissionList));
   ipcMain.handle("permission/clear", (_e, p: { sessionId?: string; tool?: string }) =>
@@ -156,8 +179,19 @@ function setupIpc(): void {
   );
 
   ipcMain.handle("plugin/list", () => req(Methods.pluginList));
+  ipcMain.handle("plugin/pick-directory", async () => {
+    if (!win) return null;
+    const result = await dialog.showOpenDialog(win, {
+      title: "Choose a senastr plugin folder",
+      properties: ["openDirectory", "showHiddenFiles"],
+    });
+    return result.canceled ? null : (result.filePaths[0] ?? null);
+  });
   ipcMain.handle("plugin/install", (_e, p: { dir: string }) => req(Methods.pluginInstall, p));
   ipcMain.handle("plugin/uninstall", (_e, p: { name: string }) => req(Methods.pluginUninstall, p));
+  ipcMain.handle("plugin/set-enabled", (_e, p: { name: string; enabled: boolean }) =>
+    req(Methods.pluginSetEnabled, p),
+  );
 
   ipcMain.handle(
     "chat/send",
@@ -172,11 +206,14 @@ function setupIpc(): void {
           const provider = await hostRef.request<ProviderConfig>(Methods.providerGet, { id: ref.providerId }, {
             timeoutMs: 10_000,
           });
+          if (provider.enabled === false) throw new Error(`provider is disabled: ${provider.label}`);
           model = {
             kind: provider.kind,
             model: ref.model,
             baseUrl: provider.baseUrl,
             apiKey: provider.apiKey,
+            apiStyle: provider.apiStyle,
+            headers: provider.headers,
           };
         } catch (err) {
           win?.webContents.send("senastr/event", {

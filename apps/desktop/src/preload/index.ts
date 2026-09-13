@@ -9,6 +9,7 @@ const invoke = (channel: string, ...args: unknown[]) => ipcRenderer.invoke(chann
 const api = {
   app: {
     version: () => invoke("app/version"),
+    dataDir: () => invoke("app/data-dir"),
   },
   project: {
     open: () => invoke("project/open"),
@@ -26,6 +27,20 @@ const api = {
     set: (provider: unknown) => invoke("provider/set", { provider }),
     delete: (id: string) => invoke("provider/delete", { id }),
     test: (id: string) => invoke("provider/test", { id }),
+    discoverModels: (input: unknown) => invoke("provider/discover-models", { input }),
+  },
+  skill: {
+    list: (query: unknown = {}) => invoke("skill/list", query),
+    set: (skill: unknown) => invoke("skill/set", { skill }),
+    delete: (params: unknown) => invoke("skill/delete", params),
+    setEnabled: (params: unknown) => invoke("skill/set-enabled", params),
+  },
+  mcp: {
+    list: (query: unknown = {}) => invoke("mcp/list", query),
+    set: (server: unknown) => invoke("mcp/set", { server }),
+    delete: (params: unknown) => invoke("mcp/delete", params),
+    setEnabled: (params: unknown) => invoke("mcp/set-enabled", params),
+    test: (params: unknown) => invoke("mcp/test", params),
   },
   permission: {
     list: () => invoke("permission/list"),
@@ -35,8 +50,10 @@ const api = {
   },
   plugin: {
     list: () => invoke("plugin/list"),
+    pickDirectory: () => invoke("plugin/pick-directory"),
     install: (dir: string) => invoke("plugin/install", { dir }),
     uninstall: (name: string) => invoke("plugin/uninstall", { name }),
+    setEnabled: (name: string, enabled: boolean) => invoke("plugin/set-enabled", { name, enabled }),
   },
   chat: {
     send: (params: { sessionId: string; text: string; modelRef: { providerId: string; model: string } }) =>

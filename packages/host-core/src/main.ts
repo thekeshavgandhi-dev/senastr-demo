@@ -9,6 +9,8 @@ import { ProviderStore } from "./providers";
 import { PermissionService } from "./permissions";
 import { ToolRunner } from "./tools/runner";
 import { PluginService } from "./plugins";
+import { SkillService } from "./skills";
+import { McpService } from "./mcp";
 import { registerMethods } from "./methods";
 
 /**
@@ -54,15 +56,18 @@ function main(): void {
   const providers = new ProviderStore(dataDir);
   const permissions = new PermissionService(dataDir, (method, params) => server.notify(method, params));
   const plugins = new PluginService(dataDir);
-  const tools = new ToolRunner(sessions, permissions, plugins);
+  const skills = new SkillService(dataDir);
+  const mcp = new McpService(dataDir);
+  const tools = new ToolRunner(sessions, permissions, plugins, mcp);
 
-  registerMethods({ server, dataDir, sessions, providers, permissions, tools, plugins });
+  registerMethods({ server, dataDir, sessions, providers, permissions, tools, plugins, skills, mcp });
 
   let shuttingDown = false;
   const shutdown = (signal: string): void => {
     if (shuttingDown) return;
     shuttingDown = true;
     process.stderr.write(`[senastr/host-core] ${signal} — shutting down\n`);
+    mcp.dispose();
     server.close();
     process.exit(0);
   };

@@ -25,9 +25,11 @@ export class AnthropicProvider implements Provider {
       }));
     }
 
-    const res = await fetch(`${base}/v1/messages`, {
+    const root = base.endsWith("/v1") ? base : `${base}/v1`;
+    const res = await fetch(`${root}/messages`, {
       method: "POST",
       headers: {
+        ...(this.spec.headers ?? {}),
         "content-type": "application/json",
         "anthropic-version": "2023-06-01",
         ...(this.spec.apiKey ? { "x-api-key": this.spec.apiKey } : {}),
