@@ -225,6 +225,173 @@ describe("AgentRuntime", () => {
   });
 });
 
+describe("ask_user / plan mode / Task delegation", () => {
+  const model = { kind: "openai", model: "m" } as const;
+
+  async function waitFor(cond: () => boolean, label: string): Promise<void> {
+    const start = Date.now();
+    while (!cond()) {
+      if (Date.now() - start > 5000) throw new Error(`timed out waiting for ${label}`);
+      await new Promise((r) => setTimeout(r, 10));
+    }
+  }
+
+  it("pauses on ask_user, emits ask/request live, and resumes via resolveAsk", async () => {
+    const host = new FakeHost();
+    const provider = new ScriptedProvider([
+      [
+        {
+          kind: "tool-call",
+          id: "ask1",
+          name: "ask_user",
+          arguments: { questions: [{ header: "Scope", question: "Which?", options: ["a", "b"] }] },
+        },
+        { kind: "done" },
+      ],
+      [{ kind: "text", delta: "thanks!" }, { kind: "done" }],
+    ]);
+    const runtime = new AgentRuntime(host, { providerFactory: () => provider });
+    const seen: string[] = [];
+    const collecting = (async () => {
+      for await (const e of runtime.runTurn({ sessionId: "s1", userMessage: "hi", model })) {
+        seen.push((e as { type: string }).type);
+      }
+    })();
+
+    await waitFor(() => runtime.pendingAsksFor("s1").length === 1, "pending ask");
+    // Live: the request event must arrive while the turn is still paused.
+    expect(seen).toContain("ask/request");
+    expect(seen).not.toContain("turn/end");
+
+    const requestId = runtime.pendingAsksFor("s1")[0].requestId;
+    expect(runtime.resolveAsk(requestId, [["a"]])).toBe(true);
+    expect(runtime.resolveAsk(requestId, [["a"]])).toBe(false);
+    await collecting;
+
+    expect(seen).toContain("ask/resolved");
+    expect(seen[seen.length - 1]).toBe("turn/end");
+    const toolMessage = host.sessions.get("s1")!.messages.find((m) => m.role === "tool");
+    expect(toolMessage?.content).toContain("Scope: a");
+  });
+
+  it("rejects malformed ask_user calls without pausing", async () => {
+    const host = new FakeHost();
+    const provider = new ScriptedProvider([
+      [{ kind: "tool-call", id: "ask9", name: "ask_user", arguments: { questions: [] } }, { kind: "done" }],
+      [{ kind: "text", delta: "moving on" }, { kind: "done" }],
+    ]);
+    const runtime = new AgentRuntime(host, { providerFactory: () => provider });
+    const events = (await collect(
+      runtime.runTurn({ sessionId: "s1", userMessage: "hi", model }),
+    )) as Array<{ type: string; ok?: boolean }>;
+    expect(events.map((e) => e.type)).not.toContain("ask/request");
+    expect(events.find((e) => e.type === "tool/result")?.ok).toBe(false);
+  });
+
+  it("plan mode blocks writes and submit_plan ends the turn with a proposal", async () => {
+    const host = new FakeHost();
+    (host.sessions.get("s1") as { mode?: string }).mode = "plan";
+    const provider = new ScriptedProvider([
+      [
+        { kind: "tool-call", id: "w1", name: "write_file", arguments: { path: "a.txt", content: "x" } },
+        { kind: "done" },
+      ],
+      [
+        {
+          kind: "tool-call",
+          id: "p1",
+          name: "submit_plan",
+          arguments: { summary: "Do the thing", steps: ["first", "second"], risks: "none" },
+        },
+        { kind: "done" },
+      ],
+    ]);
+    const runtime = new AgentRuntime(host, { providerFactory: () => provider });
+    const events = (await collect(
+      runtime.runTurn({ sessionId: "s1", userMessage: "plan it", model }),
+    )) as any[];
+
+    // The write never reached the host.
+    expect(host.toolLog).toHaveLength(0);
+    expect(events.find((e) => e.type === "tool/result" && e.callId === "w1")?.ok).toBe(false);
+    expect(events.some((e) => e.type === "plan/proposed")).toBe(true);
+    expect(events[events.length - 1].stopReason).toBe("plan");
+
+    const proposal = runtime.takePlanProposal("s1");
+    expect(proposal?.summary).toBe("Do the thing");
+    expect(proposal?.steps).toEqual(["first", "second"]);
+    expect(runtime.takePlanProposal("s1")).toBeNull();
+    // Task is hidden from the model in plan mode.
+    expect(provider.lastParams?.tools?.some((t) => t.name === "Task")).toBe(false);
+  });
+
+  it("submit_plan outside plan mode fails instead of pausing", async () => {
+    const host = new FakeHost();
+    const provider = new ScriptedProvider([
+      [
+        { kind: "tool-call", id: "p1", name: "submit_plan", arguments: { summary: "x", steps: ["y"] } },
+        { kind: "done" },
+      ],
+      [{ kind: "text", delta: "ok" }, { kind: "done" }],
+    ]);
+    const runtime = new AgentRuntime(host, { providerFactory: () => provider });
+    const events = (await collect(
+      runtime.runTurn({ sessionId: "s1", userMessage: "hi", model }),
+    )) as any[];
+    expect(events.some((e) => e.type === "plan/proposed")).toBe(false);
+    expect(events.find((e) => e.type === "tool/result")?.ok).toBe(false);
+    expect(events[events.length - 1].stopReason).toBe("stop");
+  });
+
+  it("Task delegation streams subagent/start live and returns the report", async () => {
+    const host = new FakeHost();
+    // Steps are consumed in order across the parent turn and the nested run.
+    const provider = new ScriptedProvider([
+      [
+        { kind: "tool-call", id: "t1", name: "Task", arguments: { description: "explore", prompt: "look" } },
+        { kind: "done" },
+      ],
+      [{ kind: "text", delta: "Found two files." }, { kind: "done" }],
+      [{ kind: "text", delta: "delegated!" }, { kind: "done" }],
+    ]);
+    const runtime = new AgentRuntime(host, { providerFactory: () => provider });
+    const seen: string[] = [];
+    for await (const e of runtime.runTurn({ sessionId: "s1", userMessage: "go", model })) {
+      seen.push((e as { type: string }).type);
+    }
+    expect(seen.indexOf("subagent/start")).toBeGreaterThan(-1);
+    expect(seen.indexOf("subagent/start")).toBeLessThan(seen.indexOf("subagent/end"));
+    const delegations = runtime.listDelegations("s1");
+    expect(delegations).toHaveLength(1);
+    expect(delegations[0].status).toBe("done");
+    expect(delegations[0].report).toContain("Found two files.");
+    const toolMessage = host.sessions.get("s1")!.messages.find((m) => m.role === "tool");
+    expect(toolMessage?.content).toContain("Subagent report");
+  });
+
+  it("stopping a paused ask aborts the turn", async () => {
+    const host = new FakeHost();
+    const provider = new ScriptedProvider([
+      [
+        { kind: "tool-call", id: "ask1", name: "ask_user", arguments: { questions: [{ question: "Q?" }] } },
+        { kind: "done" },
+      ],
+    ]);
+    const runtime = new AgentRuntime(host, { providerFactory: () => provider });
+    const seen: Array<{ type: string; stopReason?: string }> = [];
+    const collecting = (async () => {
+      for await (const e of runtime.runTurn({ sessionId: "s1", userMessage: "hi", model })) {
+        seen.push(e as { type: string; stopReason?: string });
+      }
+    })();
+    await waitFor(() => runtime.pendingAsksFor("s1").length === 1, "pending ask");
+    expect(runtime.stop("s1")).toBe(true);
+    await collecting;
+    expect(seen[seen.length - 1].stopReason).toBe("aborted");
+    expect(runtime.pendingAsksFor("s1")).toHaveLength(0);
+  });
+});
+
 describe("skills prompt", () => {
   it("delimits active instruction packs in the system prompt", () => {
     const prompt = withActiveSkills("base prompt", [

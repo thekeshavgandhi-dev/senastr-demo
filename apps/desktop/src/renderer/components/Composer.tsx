@@ -59,6 +59,7 @@ export function Composer({ store, variant = "docked" }: { store: SenastrStore; v
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  const [enhancing, setEnhancing] = useState(false);
   const [permMenuOpen, setPermMenuOpen] = useState(false);
   const [ctxMenuOpen, setCtxMenuOpen] = useState(false);
   const [picking, setPicking] = useState(false);
@@ -505,6 +506,29 @@ export function Composer({ store, variant = "docked" }: { store: SenastrStore; v
             </Menu>
           </div>
           <div className="composer-right">
+            {!store.busy && text.trim() ? (
+              <TooltipButton
+                type="button"
+                className="icon-btn enhance-btn"
+                tooltip="Enhance prompt with AI"
+                disabled={enhancing}
+                onClick={() => {
+                  const draft = text;
+                  setEnhancing(true);
+                  void store
+                    .enhancePrompt(draft)
+                    .then((out) => {
+                      if (out) {
+                        setText(out);
+                        store.pushNotice("Prompt enhanced", "info");
+                      }
+                    })
+                    .finally(() => setEnhancing(false));
+                }}
+              >
+                <IconSparkles size={14} className={enhancing ? "spin" : ""} />
+              </TooltipButton>
+            ) : null}
             {store.busy ? (
               <TooltipButton type="button" className="send-btn stop" tooltip="Stop" onClick={() => store.stop()}>
                 <IconStop size={14} />

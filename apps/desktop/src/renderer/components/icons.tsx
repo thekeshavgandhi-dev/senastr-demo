@@ -305,3 +305,33 @@ export const IconFork = I(
     <path d="M12 15.5V11a3 3 0 0 1 3-3h2.5" />
   </>,
 );
+export const IconHelp = I(
+  <>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M9.2 9a2.8 2.8 0 0 1 5.5.8c0 1.8-2.7 2.2-2.7 3.7" />
+    <line x1="12" y1="17" x2="12" y2="17.1" />
+  </>,
+);
+export const IconBell = I(
+  <>
+    <path d="M18 8a6 6 0 1 0-12 0c0 7-3 8-3 8h18s-3-1-3-8" />
+    <path d="M13.7 21a2 2 0 0 1-3.4 0" />
+  </>,
+);
+export const IconUsers = I(
+  <>
+    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+    <circle cx="9" cy="7" r="4" />
+    <path d="M23 21v-2a4 4 0 0 0-3-3.9" />
+    <path d="M16 3.1a4 4 0 0 1 0 7.8" />
+  </>,
+);
+export const IconActivity = I(<polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />);
+export const IconPlay = I(<polygon points="6 3 20 12 6 21 6 3" />);
+export const IconHistory = I(
+  <>
+    <path d="M3 3v5h5" />
+    <path d="M3.05 13A9 9 0 1 0 6 5.3L3 8" />
+    <polyline points="12 7 12 12 15.5 14" />
+  </>,
+);

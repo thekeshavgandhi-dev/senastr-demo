@@ -1,13 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
+  AppNotification,
+  AskAnswers,
+  AskRequest,
   ChatMessage,
+  DelegationSummary,
   GrantScope,
   PermissionGrant,
   PermissionRequest,
+  PlanProposal,
   PluginInfo,
   ProviderSummary,
   Session,
   SessionMeta,
+  SessionMode,
   ToolCall,
   ToolResult,
   TurnStopReason,
@@ -48,9 +54,6 @@ export interface TurnError {
   at: number;
 }
 
-const PLAN_PREFIX =
-  "[Plan mode — investigate and propose a step-by-step plan only. Do not modify files or run commands unless I explicitly ask.]\n\n";
-
 export function useSenastr() {
   const [view, setView] = useState<"chat" | "settings">("chat");
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
@@ -62,6 +65,10 @@ export function useSenastr() {
   const [stream, setStream] = useState<StreamState | null>(null);
   const [streamSessionId, setStreamSessionId] = useState<string | null>(null);
   const [pendingPermission, setPendingPermission] = useState<PermissionRequest | null>(null);
+  const [pendingAsks, setPendingAsks] = useState<AskRequest[]>([]);
+  const [planProposal, setPlanProposal] = useState<PlanProposal | null>(null);
+  const [delegations, setDelegations] = useState<Record<string, DelegationSummary[]>>({});
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [notices, setNotices] = useState<Notice[]>([]);
   const [version, setVersion] = useState("");
   const [dataDir, setDataDir] = useState("");
@@ -120,13 +127,14 @@ export function useSenastr() {
     initializedRef.current = true;
     void (async () => {
       try {
-        const [list, provs, plugs, grantsList, appVersion, appDataDir] = await Promise.all([
+        const [list, provs, plugs, grantsList, appVersion, appDataDir, notes] = await Promise.all([
           api.session.list(),
           api.provider.list(),
           api.plugin.list(),
           api.permission.list(),
           api.app.version(),
           api.app.dataDir(),
+          api.notify.list().catch(() => [] as AppNotification[]),
         ]);
         setSessions(list);
         setProviders(provs);
@@ -134,6 +142,7 @@ export function useSenastr() {
         setGrants(grantsList);
         setVersion(appVersion);
         setDataDir(appDataDir);
+        setNotifications(notes);
         const unarchived = list.filter((s) => !prefs.sessionPrefs[s.id]?.archived);
         const first = unarchived[0] ?? list[0];
         if (first) {
@@ -157,25 +166,49 @@ export function useSenastr() {
   // ---- live events ----------------------------------------------------------
   useEffect(() => {
     const off = api.onEvent((ev: SenastrEvent) => {
-      // The permission notification is the only event carrying `kind`;
-      // checking `in` alone narrows the rest of the union to AgentEvent.
+      // Main-process notifications carry `kind`; everything else is an AgentEvent.
       if ("kind" in ev) {
-        const request = ev.request;
-        // Auto-approve when the session's permission mode allows it.
-        if (
-          (modesRef.current.sessionPrefs[request.sessionId]?.permissionMode ??
-            modesRef.current.defaultPermissionMode) === "auto" ||
-          ((modesRef.current.sessionPrefs[request.sessionId]?.permissionMode ??
-            modesRef.current.defaultPermissionMode) === "accept-edits" &&
-            request.tool === "write_file")
-        ) {
-          void api.permission
-            .respond({ requestId: request.requestId, allow: true })
-            .catch(() => undefined);
-          return;
+        switch (ev.kind) {
+          case "permission/requested": {
+            const request = ev.request;
+            // Auto-approve when the session's permission mode allows it.
+            if (
+              (modesRef.current.sessionPrefs[request.sessionId]?.permissionMode ??
+                modesRef.current.defaultPermissionMode) === "auto" ||
+              ((modesRef.current.sessionPrefs[request.sessionId]?.permissionMode ??
+                modesRef.current.defaultPermissionMode) === "accept-edits" &&
+                request.tool === "write_file")
+            ) {
+              void api.permission
+                .respond({ requestId: request.requestId, allow: true })
+                .catch(() => undefined);
+              return;
+            }
+            setPendingPermission(request);
+            return;
+          }
+          case "notify/added":
+            setNotifications((prev) => [ev.notification, ...prev].slice(0, 100));
+            return;
+          case "scheduled/started":
+            pushNotice(`Scheduled task started: ${ev.name}`, "info");
+            return;
+          case "scheduled/finished": {
+            pushNotice(
+              ev.status === "done"
+                ? "Scheduled task finished"
+                : `Scheduled task failed${ev.error ? `: ${ev.error}` : ""}`,
+              ev.status === "done" ? "info" : "error",
+            );
+            void api.session.list().then(setSessions).catch(() => undefined);
+            if (ev.sessionId && ev.sessionId === activeIdRef.current) {
+              void api.session.get(ev.sessionId).then(setActiveSession).catch(() => undefined);
+            }
+            return;
+          }
+          default:
+            return;
         }
-        setPendingPermission(request);
-        return;
       }
       switch (ev.type) {
         case "turn/start":
@@ -203,9 +236,38 @@ export function useSenastr() {
               : s,
           );
           break;
+        case "ask/request":
+          setPendingAsks((prev) =>
+            prev.some((r) => r.requestId === ev.request.requestId) ? prev : [...prev, ev.request],
+          );
+          pushNotice("The agent asked a question", "info");
+          break;
+        case "ask/resolved":
+          setPendingAsks((prev) => prev.filter((r) => r.requestId !== ev.requestId));
+          break;
+        case "plan/proposed":
+          setPlanProposal(ev.proposal);
+          pushNotice("Plan ready for review", "info");
+          break;
+        case "subagent/start":
+        case "subagent/end":
+          setDelegations((prev) => {
+            const rows = prev[ev.sessionId] ?? [];
+            const found = rows.findIndex((d) => d.id === ev.delegation.id);
+            const next =
+              found >= 0
+                ? rows.map((d, i) => (i === found ? ev.delegation : d))
+                : [...rows, ev.delegation];
+            return { ...prev, [ev.sessionId]: next.slice(-50) };
+          });
+          break;
         case "turn/end": {
           const finishedId = inFlightSessionRef.current;
           inFlightSessionRef.current = null;
+          if (finishedId) {
+            // Aborted turns never emit ask/resolved — drop their dialogs.
+            setPendingAsks((prev) => prev.filter((r) => r.sessionId !== finishedId));
+          }
           setBusy(false);
           setStream(null);
           setStreamSessionId(null);
@@ -353,10 +415,20 @@ export function useSenastr() {
       if (id === activeIdRef.current) return;
       void api.session
         .get(id)
-        .then(setActiveSession)
+        .then((s) => {
+          setActiveSession(s);
+          // The server is the source of truth for build/plan mode.
+          if (s.mode === "build" || s.mode === "plan") {
+            updateSessionPrefs(s.id, { mode: s.mode });
+          }
+          void api.chat
+            .delegations(s.id)
+            .then((rows) => setDelegations((prev) => ({ ...prev, [s.id]: rows })))
+            .catch(() => undefined);
+        })
         .catch((err) => pushNotice(cleanError(err), "error"));
     },
-    [pushNotice],
+    [pushNotice, updateSessionPrefs],
   );
 
   const newSession = useCallback(
@@ -491,9 +563,7 @@ export function useSenastr() {
         pushNotice("Open a project folder to get started", "error");
         return;
       }
-      const mode =
-        (sessionPrefs[session.id]?.mode ?? defaultAgentMode) as AgentMode;
-      const payload = mode === "plan" ? PLAN_PREFIX + trimmed : trimmed;
+      const mode: SessionMode = (sessionPrefs[session.id]?.mode ?? defaultAgentMode) as SessionMode;
       lastUserTextRef.current = trimmed;
       setLastError(null);
       // Optimistic busy: chat/send resolves before turn/start arrives.
@@ -501,8 +571,12 @@ export function useSenastr() {
       setStreamSessionId(session.id);
       setBusy(true);
       setStream({ text: "", blocks: [] });
+      if (session.mode !== mode) {
+        // Optimistic: main applies the same mode with the send.
+        setActiveSession((prev) => (prev && prev.id === session.id ? { ...prev, mode } : prev));
+      }
       try {
-        await api.chat.send({ sessionId: session.id, text: payload, modelRef: ref });
+        await api.chat.send({ sessionId: session.id, text: trimmed, modelRef: ref, mode });
       } catch (err) {
         inFlightSessionRef.current = null;
         setBusy(false);
@@ -574,6 +648,147 @@ export function useSenastr() {
 
   const clearError = useCallback(() => setLastError(null), []);
 
+  const resolveAsk = useCallback(
+    async (requestId: string, answers: AskAnswers) => {
+      try {
+        const ok = await api.chat.resolveAsk(requestId, answers);
+        if (!ok) {
+          pushNotice("That question already expired (the turn ended)", "error");
+          setPendingAsks((prev) => prev.filter((r) => r.requestId !== requestId));
+          return;
+        }
+        setPendingAsks((prev) => prev.filter((r) => r.requestId !== requestId));
+      } catch (err) {
+        pushNotice(cleanError(err), "error");
+      }
+    },
+    [pushNotice],
+  );
+
+  /** Approve a plan proposal: back to build mode and implement. */
+  const approvePlan = useCallback(async () => {
+    const proposal = planProposal;
+    if (!proposal || busy) return;
+    setPlanProposal(null);
+    try {
+      const s = await api.session.get(proposal.sessionId);
+      setActiveSession(s);
+      updateSessionPrefs(s.id, { mode: "build" });
+      const updated = await api.session.setMode(s.id, "build");
+      setActiveSession(updated);
+      await flushQueueSend({ ...updated }, "The plan is approved. Implement it now, step by step.");
+    } catch (err) {
+      pushNotice(cleanError(err), "error");
+    }
+  }, [planProposal, busy, flushQueueSend, pushNotice, updateSessionPrefs]);
+
+  /** Reject a plan proposal: stay in plan mode and ask for a revision. */
+  const rejectPlan = useCallback(
+    async (feedback: string) => {
+      const proposal = planProposal;
+      if (!proposal || busy) return;
+      setPlanProposal(null);
+      try {
+        const s = await api.session.get(proposal.sessionId);
+        setActiveSession(s);
+        updateSessionPrefs(s.id, { mode: "plan" });
+        const note = feedback.trim();
+        await flushQueueSend(
+          s,
+          note
+            ? `Plan rejected — revise it with this feedback, then submit the updated plan (do not implement yet):\n\n${note}`
+            : "Plan rejected. Revise the plan and submit it again (do not implement yet).",
+        );
+      } catch (err) {
+        pushNotice(cleanError(err), "error");
+      }
+    },
+    [planProposal, busy, flushQueueSend, pushNotice, updateSessionPrefs],
+  );
+
+  const dismissPlan = useCallback(() => setPlanProposal(null), []);
+
+  /** Rewrite a draft prompt with the active model (tool-less one-shot). */
+  const enhancePrompt = useCallback(
+    async (text: string): Promise<string | null> => {
+      const ref = resolveModelRef();
+      if (!ref) {
+        pushNotice("Add or enable a model provider in Settings first", "error");
+        return null;
+      }
+      try {
+        const out = await api.chat.enhance({ text, modelRef: ref });
+        return out.text.trim() || null;
+      } catch (err) {
+        pushNotice(cleanError(err), "error");
+        return null;
+      }
+    },
+    [pushNotice, resolveModelRef],
+  );
+
+  /** Ask the active model for a short title for the active session. */
+  const suggestTitle = useCallback(async () => {
+    const session = activeSessionRef.current;
+    const ref = resolveModelRef();
+    if (!session) return;
+    if (!ref) {
+      pushNotice("Add or enable a model provider in Settings first", "error");
+      return;
+    }
+    const excerpt = session.messages
+      .slice(-8)
+      .map((m) => `${m.role}: ${(m.content || "").slice(0, 600)}`)
+      .join("\n\n")
+      .slice(0, 4000);
+    if (!excerpt.trim()) {
+      pushNotice("Nothing to summarize yet", "error");
+      return;
+    }
+    try {
+      const out = await api.chat.suggestTitle({ modelRef: ref, excerpt });
+      await renameSession(session.id, out.title);
+    } catch (err) {
+      pushNotice(cleanError(err), "error");
+    }
+  }, [pushNotice, renameSession, resolveModelRef]);
+
+  const markNotificationsRead = useCallback(
+    async (params: { id?: string; all?: boolean }) => {
+      setNotifications((prev) =>
+        prev.map((n) => (params.all || n.id === params.id ? { ...n, read: true } : n)),
+      );
+      try {
+        await api.notify.markRead(params);
+      } catch {
+        /* local state already updated */
+      }
+    },
+    [],
+  );
+
+  const clearNotifications = useCallback(async () => {
+    setNotifications([]);
+    try {
+      await api.notify.clear();
+    } catch {
+      /* already cleared locally */
+    }
+  }, []);
+
+  const openNotification = useCallback(
+    (n: AppNotification) => {
+      if (n.sessionId) {
+        void markNotificationsRead({ id: n.id });
+        selectSession(n.sessionId);
+        setView("chat");
+      } else if (n.taskId) {
+        openSettings("scheduled");
+      }
+    },
+    [markNotificationsRead, selectSession, openSettings],
+  );
+
   const respondPermission = useCallback(
     (allow: boolean, remember: GrantScope | null = null) => {
       const request = pendingPermission;
@@ -644,6 +859,10 @@ export function useSenastr() {
     stream,
     streamSessionId,
     pendingPermission,
+    pendingAsks,
+    planProposal,
+    delegations,
+    notifications,
     notices,
     version,
     dataDir,
@@ -697,6 +916,15 @@ export function useSenastr() {
     stop,
     retryLast,
     respondPermission,
+    resolveAsk,
+    approvePlan,
+    rejectPlan,
+    dismissPlan,
+    enhancePrompt,
+    suggestTitle,
+    markNotificationsRead,
+    clearNotifications,
+    openNotification,
     refresh,
     pushNotice,
     dismissNotice,

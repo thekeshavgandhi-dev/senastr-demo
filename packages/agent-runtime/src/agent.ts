@@ -157,8 +157,9 @@ export class AgentRuntime {
 
           // --- runtime-intercepted tools ------------------------------------
           if (call.name === "ask_user") {
-            const outcome = await this.handleAsk(session.id, call, abort.signal);
-            yield* outcome.events;
+            // Streamed live: ask/request must reach the UI while the turn
+            // is still paused (it only resumes via resolveAsk).
+            const outcome = yield* this.runAsk(session.id, call, abort.signal);
             if (outcome.aborted) {
               stopReason = "aborted";
               break;
@@ -179,8 +180,7 @@ export class AgentRuntime {
             break;
           }
           if (call.name === "Task") {
-            const outcome = await this.handleTask(session.id, call, params.model, abort.signal);
-            yield* outcome.events;
+            const outcome = yield* this.runTask(session.id, call, params.model, abort.signal);
             yield { type: "tool/result", callId: call.id, ok: outcome.result.ok, result: outcome.result };
             await this.host.appendMessages(session.id, [toolMessage(call, outcome.result)]);
             continue;
@@ -241,15 +241,18 @@ export class AgentRuntime {
   /* ask_user                                                             */
   /* ------------------------------------------------------------------ */
 
-  private async handleAsk(
+  /**
+   * Async-generator form: yields ask/request immediately so the UI can show
+   * the dialog while the turn is paused, then resolves to the tool outcome.
+   */
+  private async *runAsk(
     sessionId: string,
     call: ToolCall,
     signal: AbortSignal,
-  ): Promise<{ events: AgentEvent[]; result: ToolResult; aborted: boolean }> {
+  ): AsyncGenerator<AgentEvent, { result: ToolResult; aborted: boolean }> {
     const started = Date.now();
-    const fail = (error: string): { events: AgentEvent[]; result: ToolResult; aborted: boolean } => ({
-      events: [],
-      result: { ok: false, error, durationMs: Date.now() - started },
+    const fail = (error: string) => ({
+      result: { ok: false, error, durationMs: Date.now() - started } as ToolResult,
       aborted: false,
     });
     let questions: AskQuestion[];
@@ -259,7 +262,7 @@ export class AgentRuntime {
       return fail(err instanceof Error ? err.message : String(err));
     }
     if (signal.aborted) {
-      return { events: [], result: { ok: false, error: "stopped by user", durationMs: 0 }, aborted: true };
+      return { result: { ok: false, error: "stopped by user", durationMs: 0 }, aborted: true };
     }
     const request: AskRequest = {
       requestId: randomUUID(),
@@ -268,15 +271,18 @@ export class AgentRuntime {
       questions,
       createdAt: Date.now(),
     };
-    const events: AgentEvent[] = [{ type: "ask/request", request }];
+    yield { type: "ask/request", request };
     const answers = await new Promise<AskAnswers | typeof ASK_ABORTED>((resolve) => {
       this.pendingAsks.set(request.requestId, { request, resolve });
     });
     this.pendingAsks.delete(request.requestId);
     if (answers === ASK_ABORTED || signal.aborted) {
-      return { events, result: { ok: false, error: "stopped by user", durationMs: Date.now() - started }, aborted: true };
+      return {
+        result: { ok: false, error: "stopped by user", durationMs: Date.now() - started },
+        aborted: true,
+      };
     }
-    events.push({ type: "ask/resolved", requestId: request.requestId, sessionId });
+    yield { type: "ask/resolved", requestId: request.requestId, sessionId };
     const lines = questions.map((q, i) => {
       const answer = answers[i];
       const label = q.header || `Question ${i + 1}`;
@@ -285,7 +291,6 @@ export class AgentRuntime {
       return `${label}: ${answer.join("; ")}`;
     });
     return {
-      events,
       result: { ok: true, output: `User answers:\n${lines.join("\n")}`, durationMs: Date.now() - started },
       aborted: false,
     };
@@ -376,15 +381,18 @@ export class AgentRuntime {
   /* Task (subagents)                                                     */
   /* ------------------------------------------------------------------ */
 
-  private async handleTask(
+  /**
+   * Async-generator form: yields subagent/start as soon as the delegation is
+   * registered so the UI shows live progress, then the final tool outcome.
+   */
+  private async *runTask(
     sessionId: string,
     call: ToolCall,
     parentModel: ModelSpec,
     parentSignal: AbortSignal,
-  ): Promise<{ events: AgentEvent[]; result: ToolResult }> {
+  ): AsyncGenerator<AgentEvent, { result: ToolResult }> {
     const started = Date.now();
-    const fail = (error: string): { events: AgentEvent[]; result: ToolResult } => ({
-      events: [],
+    const fail = (error: string): { result: ToolResult } => ({
       result: { ok: false, error, durationMs: Date.now() - started },
     });
     const args = call.arguments ?? {};
@@ -425,7 +433,7 @@ export class AgentRuntime {
       startedAt: started,
     };
     this.storeDelegation(sessionId, record);
-    const events: AgentEvent[] = [{ type: "subagent/start", sessionId, delegation: { ...record } }];
+    yield { type: "subagent/start", sessionId, delegation: { ...record } };
 
     try {
       const tools = (await this.host.listTools(sessionId)).filter(
@@ -447,10 +455,9 @@ export class AgentRuntime {
       record.report = outcome.report;
       record.error = outcome.error;
       this.storeDelegation(sessionId, record);
-      events.push({ type: "subagent/end", sessionId, delegation: { ...record } });
+      yield { type: "subagent/end", sessionId, delegation: { ...record } };
       const ok = outcome.status === "done";
       return {
-        events,
         result: ok
           ? { ok: true, output: `Subagent report (${record.agentName}):\n${outcome.report}`, durationMs: Date.now() - started }
           : { ok: false, error: outcome.error ?? "subagent failed", durationMs: Date.now() - started },
@@ -460,9 +467,8 @@ export class AgentRuntime {
       record.completedAt = Date.now();
       record.error = err instanceof Error ? err.message : String(err);
       this.storeDelegation(sessionId, record);
-      events.push({ type: "subagent/end", sessionId, delegation: { ...record } });
+      yield { type: "subagent/end", sessionId, delegation: { ...record } };
       return {
-        events,
         result: { ok: false, error: record.error, durationMs: Date.now() - started },
       };
     }

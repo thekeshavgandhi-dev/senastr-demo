@@ -3,7 +3,10 @@ import type { PermissionGrant } from "@senastr/shared";
 import type { SenastrStore } from "../hooks/useSenastr";
 import { api, cleanError } from "../lib/api";
 import { prefs, type AgentMode, type PermissionMode, type ThemePref } from "../lib/prefs";
+import { InstructionsSettings } from "./settings/InstructionsSettings";
 import { McpSettings } from "./settings/McpSettings";
+import { ScheduledSettings } from "./settings/ScheduledSettings";
+import { SubagentsSettings } from "./settings/SubagentsSettings";
 import { ModelsSettings } from "./settings/ModelsSettings";
 import { PluginsSettings } from "./settings/PluginsSettings";
 import { SettingsIcon, type SettingsIconName } from "./settings/SettingsIcons";
@@ -27,6 +30,9 @@ const NAV: Array<{
   { id: "shortcuts", label: "Shortcuts", title: "Keyboard shortcuts", description: "Work faster from the keyboard", icon: "keyboard", group: "Preferences", keywords: "keyboard hotkeys bindings search sidebar panel" },
   { id: "models", label: "Models", title: "Model configuration", description: "Providers, model catalogs, and your default model", icon: "sparkles", group: "Agent", keywords: "ai api key provider openai anthropic gemini ollama default" },
   { id: "skills", label: "Skills", title: "Skills", description: "Reusable instructions for global and project workflows", icon: "book", group: "Agent", keywords: "prompt instructions markdown capability" },
+  { id: "subagents", label: "Subagents", title: "Subagents", description: "Delegate personalities the agent can spawn via the Task tool", icon: "sparkles", group: "Agent", keywords: "subagent delegate task background specialist personality" },
+  { id: "instructions", label: "Instructions", title: "Instructions & memory", description: "Standing instructions injected into every turn", icon: "edit", group: "Agent", keywords: "memory instructions standing global project context" },
+  { id: "scheduled", label: "Scheduled", title: "Scheduled tasks", description: "Headless agent runs on a cadence", icon: "terminal", group: "Agent", keywords: "schedule cron recurring automation nightly task" },
   { id: "mcp", label: "MCP", title: "MCP servers", description: "Connect local commands and Streamable HTTP tool servers", icon: "server", group: "Agent", keywords: "model context protocol tools stdio http server" },
   { id: "plugins", label: "Extensions", title: "Extensions", description: "Install and manage local agent plugins", icon: "plug", group: "Agent", keywords: "plugins marketplace tools install local" },
   { id: "permissions", label: "Permissions", title: "Permission grants", description: "Review standing approvals for privileged tools", icon: "shield", group: "Security", keywords: "grants security allow write execute revoke" },
@@ -49,6 +55,9 @@ export function SettingsView({ store }: { store: SenastrStore }) {
     shortcuts: <ShortcutsSettings />,
     models: <ModelsSettings store={store} />,
     skills: <SkillsSettings store={store} />,
+    subagents: <SubagentsSettings store={store} />,
+    instructions: <InstructionsSettings store={store} />,
+    scheduled: <ScheduledSettings store={store} />,
     mcp: <McpSettings store={store} />,
     plugins: <PluginsSettings store={store} />,
     permissions: <PermissionsSettings store={store} />,

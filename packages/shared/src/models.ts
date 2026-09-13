@@ -513,8 +513,9 @@ export interface AppNotification {
   id: string;
   title: string;
   body?: string;
-  kind: "info" | "success" | "error";
+  kind: "info" | "success" | "error" | "ask" | "plan" | "scheduled";
   sessionId?: string;
   taskId?: string;
   createdAt: number;
+  read: boolean;
 }

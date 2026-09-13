@@ -141,7 +141,9 @@ export const Methods = {
   scheduledRecordRun: "scheduled/record-run",
 
   reviewList: "review/list",
+  reviewGet: "review/get",
   reviewRollback: "review/rollback",
+  reviewPurge: "review/purge",
 
   projectGetContext: "project/get-context",
   projectSetContext: "project/set-context",

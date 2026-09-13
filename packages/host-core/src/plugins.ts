@@ -122,11 +122,22 @@ export class PluginService {
   }
 
   /** Clone a git repository and install the plugin it contains. The same
-   *  manifest validation as local installs applies. */
+   *  manifest validation as local installs applies. Only well-known public
+   *  git hosts are accepted (use local-folder install for anything else). */
   async installFromUrl(url: string): Promise<PluginInfo> {
     const cleaned = url.trim();
-    if (!/^(https?:\/\/|git@|ssh:\/\/|file:\/\/)/.test(cleaned)) {
-      throw new RpcError(ErrorCodes.INVALID_PARAMS, "plugin URL must be http(s), ssh, git@ or file://");
+    const host = pluginUrlHost(cleaned);
+    if (!host) {
+      throw new RpcError(
+        ErrorCodes.INVALID_PARAMS,
+        "plugin URL must be https://, ssh:// or git@ form",
+      );
+    }
+    if (!ALLOWED_PLUGIN_HOSTS.has(host)) {
+      throw new RpcError(
+        ErrorCodes.INVALID_PARAMS,
+        `plugin host not allowed: ${host} (allowed: ${[...ALLOWED_PLUGIN_HOSTS].join(", ")})`,
+      );
     }
     const workdir = mkdtempSync(join(tmpdir(), "senastr-plugin-"));
     try {
@@ -237,4 +248,31 @@ function execFileAsync(file: string, args: string[]): Promise<void> {
       else resolvePromise();
     });
   });
+}
+
+/** Public git hosts accepted for URL installs. */
+const ALLOWED_PLUGIN_HOSTS = new Set([
+  "github.com",
+  "www.github.com",
+  "gitlab.com",
+  "www.gitlab.com",
+  "bitbucket.org",
+  "www.bitbucket.org",
+  "git.sr.ht",
+]);
+
+/** Extract the hostname from an https/ssh/git@ URL, or null when malformed. */
+function pluginUrlHost(cleaned: string): string | null {
+  if (cleaned.startsWith("git@")) {
+    const rest = cleaned.slice("git@".length);
+    const end = rest.search(/[:/]/);
+    if (end <= 0) return null;
+    return rest.slice(0, end).toLowerCase() || null;
+  }
+  if (!/^(https:\/\/|ssh:\/\/)/.test(cleaned)) return null;
+  try {
+    return new URL(cleaned).hostname.toLowerCase() || null;
+  } catch {
+    return null;
+  }
 }

@@ -3,13 +3,15 @@ import type { PluginInfo } from "@senastr/shared";
 import type { SenastrStore } from "../../hooks/useSenastr";
 import { api, cleanError } from "../../lib/api";
 import { SettingsIcon } from "./SettingsIcons";
-import { EmptyState, IconButton, Toggle } from "./SettingsPrimitives";
+import { EmptyState, Field, IconButton, Modal, Toggle } from "./SettingsPrimitives";
 
 export function PluginsSettings({ store }: { store: SenastrStore }) {
   const [search, setSearch] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [urlOpen, setUrlOpen] = useState(false);
+  const [url, setUrl] = useState("");
   const visible = useMemo(() => {
     const query = search.trim().toLowerCase();
     return store.plugins.filter((plugin) => !query || `${plugin.name} ${plugin.description ?? ""} ${plugin.author ?? ""} ${plugin.tools.join(" ")}`.toLowerCase().includes(query));
@@ -23,6 +25,20 @@ export function PluginsSettings({ store }: { store: SenastrStore }) {
       const plugin = await api.plugin.install(dir);
       await store.refresh();
       store.pushNotice(`${plugin.name} installed`, "info");
+    } catch (error) { store.pushNotice(cleanError(error), "error"); }
+    finally { setBusy(null); }
+  };
+
+  const installUrl = async () => {
+    const trimmed = url.trim();
+    if (!trimmed) return;
+    setBusy("install-url");
+    try {
+      const plugin = await api.plugin.installUrl(trimmed);
+      await store.refresh();
+      store.pushNotice(`${plugin.name} installed`, "info");
+      setUrlOpen(false);
+      setUrl("");
     } catch (error) { store.pushNotice(cleanError(error), "error"); }
     finally { setBusy(null); }
   };
@@ -52,12 +68,13 @@ export function PluginsSettings({ store }: { store: SenastrStore }) {
     finally { setBusy(null); setConfirmDelete(null); }
   };
 
-  return (
+  const body = (
     <div className="settings-page-stack extensions-page">
       <div className="capability-intro"><p>Extensions add tools to the agent through a reviewed declarative manifest.</p><span>Every extension command stays project-confined and goes through senastr's permission gate.</span></div>
       <div className="extensions-toolbar">
         <div className="settings-segments"><button type="button" className="active">Installed <span>{store.plugins.length}</span></button></div>
         <div className="capability-search"><SettingsIcon name="search" size={14} /><input value={search} placeholder="Search installed extensions" onChange={(event) => setSearch(event.target.value)} />{search ? <button type="button" onClick={() => setSearch("")}><SettingsIcon name="x" size={13} /></button> : null}</div>
+        <button type="button" className="settings-ghost-btn" onClick={() => setUrlOpen(true)}><SettingsIcon name="globe" size={14} /> Install from URL</button>
         <button type="button" className="settings-primary-btn" disabled={busy === "install"} onClick={() => void install()}><SettingsIcon name={busy === "install" ? "refresh" : "folder"} size={14} className={busy === "install" ? "spin" : ""} /> {busy === "install" ? "Installing…" : "Install local"}</button>
       </div>
       <div className="extension-security-note"><SettingsIcon name="shield" size={16} /><div><strong>Local and permission-gated</strong><span>senastr copies the selected plugin into its local data directory. No extension code runs inside the renderer.</span></div></div>
@@ -94,8 +111,34 @@ export function PluginsSettings({ store }: { store: SenastrStore }) {
       <div className="extension-dev-note"><div><strong>Develop an extension</strong><span>Start with <code>examples/plugins/hello-senastr</code>. Manifests declare shell-command tools and their JSON schemas.</span></div><span className="settings-badge">senastr.plugin.json</span></div>
     </div>
   );
+  return (
+    <>
+      {body}
+      {urlOpen ? (
+        <Modal
+          title="Install extension from URL"
+          subtitle="Clones a git repository and installs the extension it contains."
+          onClose={() => setUrlOpen(false)}
+          footer={
+            <>
+              <span />
+              <div>
+                <button type="button" className="settings-ghost-btn" onClick={() => setUrlOpen(false)}>Cancel</button>
+                <button type="button" className="settings-primary-btn" disabled={!url.trim() || busy === "install-url"} onClick={() => void installUrl()}>
+                  {busy === "install-url" ? "Installing…" : "Install"}
+                </button>
+              </div>
+            </>
+          }
+        >
+          <Field label="Git URL" hint="HTTPS or SSH repository URL. Only github.com, gitlab.com, bitbucket.org and sourcehut are allowed.">
+            <input autoFocus value={url} spellCheck={false} placeholder="https://github.com/org/senastr-plugin" onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void installUrl(); }} />
+          </Field>
+        </Modal>
+      ) : null}
+    </>
+  );
 }
-
 function displayPluginName(name: string): string {
   return name.split("-").map((part) => part.slice(0, 1).toUpperCase() + part.slice(1)).join(" ");
 }

@@ -311,6 +311,16 @@ export function registerMethods(ctx: MethodContext): void {
     const sessionId = requireString(params, "sessionId");
     return review.list(sessionId);
   });
+  server.onMethod(Methods.reviewGet, (params: { sessionId: string; snapshotId: string }) => {
+    const sessionId = requireString(params, "sessionId");
+    const snapshotId = requireString(params, "snapshotId");
+    return review.get(sessionId, snapshotId);
+  });
+  server.onMethod(Methods.reviewPurge, (params: { sessionId: string }) => {
+    const sessionId = requireString(params, "sessionId");
+    review.purge(sessionId);
+    return { ok: true };
+  });
   server.onMethod(Methods.reviewRollback, (params: { sessionId: string; snapshotId: string }) => {
     const sessionId = requireString(params, "sessionId");
     const snapshotId = requireString(params, "snapshotId");

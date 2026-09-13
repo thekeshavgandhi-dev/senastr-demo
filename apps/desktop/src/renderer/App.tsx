@@ -1,6 +1,8 @@
 import { useEffect } from "react";
 import { useSenastr } from "./hooks/useSenastr";
 import { resolveTheme } from "./lib/prefs";
+import { AskDialog } from "./components/AskDialog";
+import { PlanDialog } from "./components/PlanDialog";
 import { Sidebar } from "./components/Sidebar";
 import { ConversationTopbar } from "./components/ConversationTopbar";
 import { ChatSurface } from "./components/ChatView";
@@ -62,6 +64,8 @@ export default function App() {
   // The `s` object identity changes every render; the keydown effect above
   // re-subscribes — fine for a single global listener.
 
+  const activeAsk = s.pendingAsks.find((r) => r.sessionId === s.activeSession?.id) ?? s.pendingAsks[0] ?? null;
+
   if (s.view === "settings") {
     return (
       <div className="app settings-mode">
@@ -73,6 +77,13 @@ export default function App() {
             request={s.pendingPermission}
             sessionTitle={s.activeSession?.title}
             onDecide={(allow, remember) => s.respondPermission(allow, remember)}
+          />
+        )}
+        {activeAsk && (
+          <AskDialog
+            request={activeAsk}
+            sessionTitle={s.sessions.find((x) => x.id === activeAsk.sessionId)?.title}
+            onSubmit={(requestId, answers) => void s.resolveAsk(requestId, answers)}
           />
         )}
       </div>
@@ -94,6 +105,23 @@ export default function App() {
           request={s.pendingPermission}
           sessionTitle={s.activeSession?.title}
           onDecide={(allow, remember) => s.respondPermission(allow, remember)}
+        />
+      )}
+      {activeAsk && (
+        <AskDialog
+          request={activeAsk}
+          sessionTitle={s.activeSession?.title}
+          onSubmit={(requestId, answers) => void s.resolveAsk(requestId, answers)}
+        />
+      )}
+      {s.planProposal && (
+        <PlanDialog
+          proposal={s.planProposal}
+          sessionTitle={s.sessions.find((x) => x.id === s.planProposal?.sessionId)?.title}
+          busy={s.busy}
+          onApprove={() => void s.approvePlan()}
+          onReject={(feedback) => void s.rejectPlan(feedback)}
+          onDismiss={() => s.dismissPlan()}
         />
       )}
     </div>

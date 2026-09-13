@@ -13,12 +13,15 @@ import {
   IconCopy,
   IconFile,
   IconFolderOpen,
+  IconHelp,
   IconNewSession,
   IconPlug,
   IconRefresh,
   IconServer,
   IconSettings,
+  IconSparkles,
   IconTerminal,
+  IconUsers,
   IconX,
 } from "./icons";
 import { TooltipButton, cx } from "./ui";
@@ -62,8 +65,18 @@ function buildItems(messages: ChatMessage[], stream: StreamState | null): Item[]
 function toolIcon(name: string, size = 13) {
   if (name === "run_command") return <IconTerminal size={size} />;
   if (name === "read_file" || name === "write_file" || name === "list_dir") return <IconFile size={size} />;
+  if (name === "ask_user") return <IconHelp size={size} />;
+  if (name === "submit_plan") return <IconSparkles size={size} />;
+  if (name === "Task") return <IconUsers size={size} />;
   if (name.startsWith("mcp_")) return <IconServer size={size} />;
   return <IconPlug size={size} />;
+}
+
+function toolLabel(name: string): string {
+  if (name === "ask_user") return "Asked you";
+  if (name === "submit_plan") return "Submitted plan";
+  if (name === "Task") return "Subagent";
+  return name;
 }
 
 function toolSummary(call: ToolCall): string {
@@ -74,6 +87,17 @@ function toolSummary(call: ToolCall): string {
   }
   if (call.name === "run_command") {
     return str(a.command ?? a.cmd) || "";
+  }
+  if (call.name === "ask_user") {
+    const qs = Array.isArray(a.questions) ? a.questions : [];
+    const first = qs[0] as { question?: unknown } | undefined;
+    return typeof first?.question === "string" ? first.question : `${qs.length} question${qs.length === 1 ? "" : "s"}`;
+  }
+  if (call.name === "submit_plan") {
+    return str(a.summary) || "";
+  }
+  if (call.name === "Task") {
+    return str(a.description) || (typeof a.subagent === "string" ? a.subagent : "");
   }
   const keys = Object.keys(a);
   if (!keys.length) return "";
@@ -90,7 +114,7 @@ function ToolRow({ call, result, live }: { call: ToolCall; result?: ToolResult; 
     <div className={cx("tool-row", status)}>
       <button type="button" className="tool-row-head" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
         <span className="tool-row-icon">{toolIcon(call.name)}</span>
-        <span className="tool-row-name">{call.name}</span>
+        <span className="tool-row-name" title={call.name}>{toolLabel(call.name)}</span>
         {summary ? (
           <span className="tool-row-summary" title={summary}>
             {summary}

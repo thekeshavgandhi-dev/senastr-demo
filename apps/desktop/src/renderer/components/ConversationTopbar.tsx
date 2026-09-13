@@ -1,6 +1,7 @@
 import type { SenastrStore } from "../hooks/useSenastr";
 import { isDefaultTitle, projectDisplayName } from "../lib/prefs";
-import { IconNewSession, IconPanel, IconSearch, IconSidebar } from "./icons";
+import { NotificationBell } from "./NotificationCenter";
+import { IconNewSession, IconPanel, IconSearch, IconSidebar, IconSparkles } from "./icons";
 import { TooltipButton } from "./ui";
 
 export function ConversationTopbar({ store }: { store: SenastrStore }) {
@@ -50,6 +51,17 @@ export function ConversationTopbar({ store }: { store: SenastrStore }) {
         >
           <IconSearch size={15} />
         </TooltipButton>
+        {store.activeSession && (store.activeSession.messages?.length ?? 0) > 0 ? (
+          <TooltipButton
+            type="button"
+            className="ct-btn"
+            tooltip="Generate title with AI"
+            onClick={() => void store.suggestTitle()}
+          >
+            <IconSparkles size={15} />
+          </TooltipButton>
+        ) : null}
+        <NotificationBell store={store} />
         <TooltipButton
           type="button"
           className={`ct-btn ${store.workPanelOpen ? "active" : ""}`}
