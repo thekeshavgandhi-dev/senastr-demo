@@ -1,7 +1,9 @@
 import type {
   ChatMessage,
+  ProviderApiStyle,
   ProviderKind,
   Session,
+  SkillRecord,
   ToolCall,
   ToolDefinition,
   ToolResult,
@@ -16,6 +18,8 @@ export interface ModelSpec {
   model: string;
   baseUrl?: string;
   apiKey?: string;
+  apiStyle?: ProviderApiStyle;
+  headers?: Record<string, string>;
 }
 
 /** Normalized stream events from any provider. */
@@ -45,7 +49,9 @@ export interface Provider {
 export interface HostBridge {
   getSession(id: string): Promise<Session>;
   appendMessages(id: string, messages: ChatMessage[]): Promise<unknown>;
-  listTools(): Promise<ToolDefinition[]>;
+  listTools(sessionId?: string): Promise<ToolDefinition[]>;
+  /** Optional for lightweight/test hosts. Desktop host-core implements it. */
+  listSkills?(projectPath?: string | null): Promise<SkillRecord[]>;
   runTool(req: { sessionId: string; tool: string; args: Record<string, unknown> }): Promise<ToolResult>;
 }
 

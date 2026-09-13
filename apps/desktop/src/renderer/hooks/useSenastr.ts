@@ -37,6 +37,7 @@ export function useSenastr() {
   const [pendingPermission, setPendingPermission] = useState<PermissionRequest | null>(null);
   const [notices, setNotices] = useState<Notice[]>([]);
   const [version, setVersion] = useState("");
+  const [dataDir, setDataDir] = useState("");
   const [modelRef, setModelRefState] = useState<SenastrModelRef | null>(() => readStoredModelRef());
 
   const noticeSeq = useRef(0);
@@ -58,20 +59,23 @@ export function useSenastr() {
     initializedRef.current = true;
     void (async () => {
       try {
-        const [list, provs, plugs, grantsList] = await Promise.all([
+        const [list, provs, plugs, grantsList, appVersion, appDataDir] = await Promise.all([
           api.session.list(),
           api.provider.list(),
           api.plugin.list(),
           api.permission.list(),
+          api.app.version(),
+          api.app.dataDir(),
         ]);
         setSessions(list);
         setProviders(provs);
         setPlugins(plugs);
         setGrants(grantsList);
+        setVersion(appVersion);
+        setDataDir(appDataDir);
         if (list[0]) {
           setActiveSession(await api.session.get(list[0].id));
         }
-        setVersion(await api.app.version());
       } catch (err) {
         pushNotice(cleanError(err), "error");
       }
@@ -220,16 +224,17 @@ export function useSenastr() {
         pushNotice("Open a project folder to get started", "error");
         return;
       }
-      if (!providers.length) {
-        pushNotice("Add a model provider in Settings first", "error");
+      const enabledProviders = providers.filter((provider) => provider.enabled);
+      if (!enabledProviders.length) {
+        pushNotice("Add or enable a model provider in Settings first", "error");
         return;
       }
       const ref =
-        modelRef && providers.some((p) => p.id === modelRef.providerId && p.models.includes(modelRef.model))
+        modelRef && enabledProviders.some((p) => p.id === modelRef.providerId && p.models.includes(modelRef.model))
           ? modelRef
           : {
-              providerId: providers[0].id,
-              model: providers[0].defaultModel ?? providers[0].models[0],
+              providerId: enabledProviders[0].id,
+              model: enabledProviders[0].defaultModel ?? enabledProviders[0].models[0],
             };
       lastUserTextRef.current = trimmed;
       try {
@@ -295,6 +300,7 @@ export function useSenastr() {
     pendingPermission,
     notices,
     version,
+    dataDir,
     modelRef,
     setModelRef,
     selectSession,

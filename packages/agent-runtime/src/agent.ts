@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
   type AgentEvent,
   type ChatMessage,
+  type SkillRecord,
   type ToolCall,
   type TurnStopReason,
   type Usage,
@@ -69,9 +70,10 @@ export class AgentRuntime {
 
       for (;;) {
         step += 1;
-        const tools = await this.host.listTools();
+        const tools = await this.host.listTools(session.id);
         const history = (await this.host.getSession(session.id)).messages;
-        const system = defaultSystemPrompt(session.projectPath!);
+        const skills = this.host.listSkills ? await this.host.listSkills(session.projectPath) : [];
+        const system = withActiveSkills(defaultSystemPrompt(session.projectPath!), skills);
 
         let text = "";
         const calls: ToolCall[] = [];
@@ -165,4 +167,21 @@ function addUsage(total: Usage, part?: Usage): void {
   if (!part) return;
   if (typeof part.inputTokens === "number") total.inputTokens = (total.inputTokens ?? 0) + part.inputTokens;
   if (typeof part.outputTokens === "number") total.outputTokens = (total.outputTokens ?? 0) + part.outputTokens;
+}
+
+/** Skills are explicit user instructions, not tools. Delimit each document so
+ * one skill cannot accidentally blend into the next in the system prompt. */
+export function withActiveSkills(system: string, skills: SkillRecord[]): string {
+  if (!skills.length) return system;
+  const blocks = skills.map((skill) =>
+    [
+      `<skill id="${skill.id}" name="${skill.name.replace(/[\"<>]/g, "")}">`,
+      skill.description ? `Purpose: ${skill.description}` : "",
+      skill.content,
+      "</skill>",
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  );
+  return `${system}\n\nActive user skills\nFollow these project-relevant instruction packs when applicable:\n\n${blocks.join("\n\n")}`;
 }

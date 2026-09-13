@@ -12,6 +12,7 @@ import {
 import {
   AgentRuntime,
   toAnthropicMessages,
+  withActiveSkills,
   toOpenAIMessages,
   type HostBridge,
   type Provider,
@@ -221,6 +222,26 @@ describe("AgentRuntime", () => {
     expect(provider.lastParams?.system).toContain("senastr");
     expect(provider.lastParams?.system).toContain(host.sessions.get("s1")!.projectPath!);
     expect(provider.lastParams?.messages.at(-1)?.content).toBe("hi");
+  });
+});
+
+describe("skills prompt", () => {
+  it("delimits active instruction packs in the system prompt", () => {
+    const prompt = withActiveSkills("base prompt", [
+      {
+        id: "review",
+        name: "Review changes",
+        description: "Review before finishing",
+        content: "Run the tests and inspect the diff.",
+        enabled: true,
+        level: "global",
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ]);
+    expect(prompt).toContain('<skill id="review" name="Review changes">');
+    expect(prompt).toContain("Run the tests and inspect the diff.");
+    expect(prompt).toContain("</skill>");
   });
 });
 

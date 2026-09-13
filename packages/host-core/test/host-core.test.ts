@@ -14,11 +14,13 @@ import {
   type ToolResult,
 } from "@senastr/shared";
 import {
+  McpService,
   PermissionService,
   PluginService,
   ProviderStore,
   RpcServer,
   SessionStore,
+  SkillService,
   ToolRunner,
   registerMethods,
   safeJoin,
@@ -40,6 +42,8 @@ interface Harness {
   permissions: PermissionService;
   tools: ToolRunner;
   plugins: PluginService;
+  skills: SkillService;
+  mcp: McpService;
   stop: () => Promise<void>;
 }
 
@@ -57,8 +61,10 @@ function makeHarness(permTimeoutMs = 120_000): Harness {
   const providers = new ProviderStore(dataDir);
   const permissions = new PermissionService(dataDir, (m, p) => server.notify(m, p), permTimeoutMs);
   const plugins = new PluginService(dataDir);
-  const tools = new ToolRunner(sessions, permissions, plugins);
-  registerMethods({ server, dataDir, sessions, providers, permissions, tools, plugins });
+  const skills = new SkillService(dataDir);
+  const mcp = new McpService(dataDir);
+  const tools = new ToolRunner(sessions, permissions, plugins, mcp);
+  registerMethods({ server, dataDir, sessions, providers, permissions, tools, plugins, skills, mcp });
 
   const notifications: Array<{ method: string; params: unknown }> = [];
   let buffer = "";
@@ -117,7 +123,10 @@ function makeHarness(permTimeoutMs = 120_000): Harness {
     permissions,
     tools,
     plugins,
+    skills,
+    mcp,
     stop: async () => {
+      mcp.dispose();
       server.close();
       serverStdin.end();
       serverStdout.destroy();

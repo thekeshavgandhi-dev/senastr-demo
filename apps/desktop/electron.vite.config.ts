@@ -14,6 +14,13 @@ export default defineConfig({
     resolve: {
       alias: {
         "@": join(__dirname, "src/renderer"),
+        // The renderer needs this one value catalog. Point at its browser-safe
+        // source module rather than pulling the shared CommonJS barrel (which
+        // also exports the Node-only sidecar RPC client) into the web bundle.
+        "@senastr/provider-presets": join(
+          __dirname,
+          "../../packages/shared/src/provider-presets.ts",
+        ),
       },
     },
   },

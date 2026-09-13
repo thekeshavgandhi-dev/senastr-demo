@@ -106,6 +106,19 @@ export const Methods = {
   providerSet: "provider/set",
   providerDelete: "provider/delete",
   providerTest: "provider/test",
+  providerDiscoverModels: "provider/discover-models",
+
+  skillList: "skill/list",
+  skillActive: "skill/active",
+  skillSet: "skill/set",
+  skillDelete: "skill/delete",
+  skillSetEnabled: "skill/set-enabled",
+
+  mcpList: "mcp/list",
+  mcpSet: "mcp/set",
+  mcpDelete: "mcp/delete",
+  mcpSetEnabled: "mcp/set-enabled",
+  mcpTest: "mcp/test",
 
   toolRun: "tool/run",
 
@@ -116,6 +129,7 @@ export const Methods = {
   pluginList: "plugin/list",
   pluginInstall: "plugin/install",
   pluginUninstall: "plugin/uninstall",
+  pluginSetEnabled: "plugin/set-enabled",
 } as const;
 
 export type MethodName = (typeof Methods)[keyof typeof Methods];

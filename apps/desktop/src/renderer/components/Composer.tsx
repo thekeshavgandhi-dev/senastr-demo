@@ -8,7 +8,7 @@ export interface ModelOption {
 }
 
 export function modelOptions(providers: ProviderSummary[]): ModelOption[] {
-  return providers.flatMap((p) =>
+  return providers.filter((provider) => provider.enabled).flatMap((p) =>
     p.models.map((m) => ({
       value: `${p.id}:${m}`,
       label: `${p.label} · ${m}`,
