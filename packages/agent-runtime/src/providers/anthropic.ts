@@ -1,6 +1,7 @@
 import type { Provider, ProviderChatParams, ModelSpec, ProviderEvent } from "../types";
 import { toAnthropicMessages } from "../messages";
 import { parseSseLines, safeReadText, parseToolArgs } from "./openai";
+import { postToModel } from "./resilient";
 import type { Usage } from "@senastr/shared";
 
 /**
@@ -26,16 +27,19 @@ export class AnthropicProvider implements Provider {
     }
 
     const root = base.endsWith("/v1") ? base : `${base}/v1`;
-    const res = await fetch(`${root}/messages`, {
-      method: "POST",
-      headers: {
-        ...(this.spec.headers ?? {}),
-        "content-type": "application/json",
-        "anthropic-version": "2023-06-01",
-        ...(this.spec.apiKey ? { "x-api-key": this.spec.apiKey } : {}),
-      },
-      body: JSON.stringify(body),
+    const res = await postToModel({
+      spec: this.spec,
       signal: params.signal,
+      build: (apiKey) => ({
+        url: `${root}/messages`,
+        headers: {
+          ...(this.spec.headers ?? {}),
+          "content-type": "application/json",
+          "anthropic-version": "2023-06-01",
+          ...(apiKey ? { "x-api-key": apiKey } : {}),
+        },
+        body: JSON.stringify(body),
+      }),
     });
 
     if (!res.ok || !res.body) {

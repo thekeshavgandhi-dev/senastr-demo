@@ -17,9 +17,17 @@ export interface ModelSpec {
   kind: ProviderKind;
   model: string;
   baseUrl?: string;
+  /** Legacy single key; `apiKeys` (when present) is the key pool. */
   apiKey?: string;
+  /** Key pool. When a request hits a rate limit (429) or a rejected key
+   * (401/403), the next key in the pool is used automatically. */
+  apiKeys?: string[];
   apiStyle?: ProviderApiStyle;
   headers?: Record<string, string>;
+  /** Client-side throttle: max model requests per minute for this provider. */
+  rateLimitPerMin?: number;
+  /** Provider registry id; identifies the key pool / throttle bucket. */
+  providerId?: string;
 }
 
 /** Normalized stream events from any provider. */

@@ -9,6 +9,7 @@ import {
   Notifications,
   RpcError,
   SENASTR_VERSION,
+  SECRET_MASK,
   type PermissionRequest,
   type Session,
   type ToolResult,
@@ -397,6 +398,75 @@ describe("providers", () => {
 
     await h.request(Methods.providerDelete, { id: "local" });
     expect(await h.request<unknown[]>(Methods.providerList)).toHaveLength(0);
+    await h.stop();
+  });
+
+  it("stores a key pool and merges masked edits without leaking keys", async () => {
+    const h = makeHarness();
+    const summary = await h.request<{ hasApiKey: boolean; apiKeyCount: number; rateLimitPerMin?: number }>(
+      Methods.providerSet,
+      {
+        provider: {
+          id: "multi",
+          kind: "openai",
+          label: "Multi",
+          baseUrl: "https://api.example.com/v1",
+          apiKeys: ["key-one", "key-two"],
+          rateLimitPerMin: 120,
+          models: ["m1"],
+        },
+      },
+    );
+    expect(summary.hasApiKey).toBe(true);
+    expect(summary.apiKeyCount).toBe(2);
+    expect(summary.rateLimitPerMin).toBe(120);
+
+    // The list must expose counts, never the keys themselves.
+    const listed = await h.request<Record<string, unknown>[]>(Methods.providerList);
+    expect(JSON.stringify(listed)).not.toContain("key-one");
+    expect(listed[0].apiKeyCount).toBe(2);
+
+    // Edit: keep key-one (mask), drop key-two, append a fresh key.
+    const updated = await h.request<{ apiKeyCount: number }>(Methods.providerSet, {
+      provider: {
+        id: "multi",
+        kind: "openai",
+        label: "Multi",
+        baseUrl: "https://api.example.com/v1",
+        apiKeys: [SECRET_MASK, "key-three"],
+        models: ["m1"],
+      },
+    });
+    expect(updated.apiKeyCount).toBe(2);
+    const full = await h.request<{ apiKeys?: string[]; apiKey?: string }>(Methods.providerGet, { id: "multi" });
+    expect(full.apiKeys).toEqual(["key-one", "key-three"]);
+    expect(full.apiKey).toBe("key-one"); // legacy field mirrors the first key
+
+    // An edit with no key material keeps the stored pool.
+    const untouched = await h.request<{ apiKeyCount: number }>(Methods.providerSet, {
+      provider: {
+        id: "multi",
+        kind: "openai",
+        label: "Multi",
+        baseUrl: "https://api.example.com/v1",
+        models: ["m1"],
+      },
+    });
+    expect(untouched.apiKeyCount).toBe(2);
+
+    // An explicit empty pool clears all keys.
+    const cleared = await h.request<{ hasApiKey: boolean; apiKeyCount: number }>(Methods.providerSet, {
+      provider: {
+        id: "multi",
+        kind: "openai",
+        label: "Multi",
+        baseUrl: "https://api.example.com/v1",
+        apiKeys: [],
+        models: ["m1"],
+      },
+    });
+    expect(cleared.hasApiKey).toBe(false);
+    expect(cleared.apiKeyCount).toBe(0);
     await h.stop();
   });
 

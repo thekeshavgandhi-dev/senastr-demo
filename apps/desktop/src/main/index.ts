@@ -207,13 +207,18 @@ function setupIpc(): void {
             timeoutMs: 10_000,
           });
           if (provider.enabled === false) throw new Error(`provider is disabled: ${provider.label}`);
+          const apiKeys =
+            provider.apiKeys?.length ? provider.apiKeys : provider.apiKey ? [provider.apiKey] : undefined;
           model = {
             kind: provider.kind,
             model: ref.model,
             baseUrl: provider.baseUrl,
-            apiKey: provider.apiKey,
+            apiKey: apiKeys?.[0],
+            apiKeys,
             apiStyle: provider.apiStyle,
             headers: provider.headers,
+            rateLimitPerMin: provider.rateLimitPerMin,
+            providerId: provider.id,
           };
         } catch (err) {
           win?.webContents.send("senastr/event", {

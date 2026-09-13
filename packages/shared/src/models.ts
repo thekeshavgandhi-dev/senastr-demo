@@ -32,6 +32,10 @@ export interface Session extends SessionMeta {
   messages: ChatMessage[];
 }
 
+/** The placeholder shown for any stored secret (API key, header value, env
+ * value). Sending the mask back to host-core means "keep the stored value". */
+export const SECRET_MASK = "••••••";
+
 export type ProviderKind = "openai" | "anthropic" | "google";
 
 /** The HTTP wire format used by a provider. `kind` is retained as the broad
@@ -53,19 +57,29 @@ export interface ProviderConfig {
   /** API root. Operation suffixes such as /chat/completions are added by the
    * runtime and should not be included here. */
   baseUrl?: string;
+  /** Legacy single key. `apiKeys` is preferred; when present it wins. */
   apiKey?: string;
+  /** Key pool. The runtime rotates through these automatically when one
+   * hits its rate limit (HTTP 429) or is rejected (401/403), so a burst of
+   * usage does not stall the agent. Entries equal to {@link SECRET_MASK}
+   * mean "keep the stored key at this position". */
+  apiKeys?: string[];
   apiStyle?: ProviderApiStyle;
   /** Optional non-authentication headers for gateways and organization
    * routing. Reserved credential headers are rejected by host-core. */
   headers?: Record<string, string>;
+  /** Optional client-side throttle: max model requests per minute across the
+   * whole key pool (0/undefined = no throttling). Keeps you under the
+   * provider's own limits before they get a chance to reject you. */
+  rateLimitPerMin?: number;
   models: string[];
   defaultModel?: string;
   /** Disabled providers stay configured but are omitted from model pickers. */
   enabled?: boolean;
 }
 
-/** Renderer-safe provider metadata. The API key is omitted and all custom
- * header values are replaced with a secret mask. */
+/** Renderer-safe provider metadata. API keys are omitted (only the count is
+ * exposed) and all custom header values are replaced with a secret mask. */
 export interface ProviderSummary {
   id: string;
   kind: ProviderKind;
@@ -73,8 +87,11 @@ export interface ProviderSummary {
   label: string;
   baseUrl?: string;
   hasApiKey: boolean;
+  /** How many keys are stored in the provider's key pool. */
+  apiKeyCount: number;
   apiStyle: ProviderApiStyle;
   headers?: Record<string, string>;
+  rateLimitPerMin?: number;
   models: string[];
   defaultModel?: string;
   enabled: boolean;
@@ -87,7 +104,11 @@ export interface ProviderDiscoveryInput {
   id?: string;
   kind: ProviderKind;
   baseUrl?: string;
+  /** Legacy single key for the probe request. */
   apiKey?: string;
+  /** Key pool draft; masked entries resolve against the stored keys. The
+   * first resolved key is used for the probe. */
+  apiKeys?: string[];
   apiStyle?: ProviderApiStyle;
   headers?: Record<string, string>;
 }

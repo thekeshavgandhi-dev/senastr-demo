@@ -21,6 +21,9 @@ export default defineConfig({
           __dirname,
           "../../packages/shared/src/provider-presets.ts",
         ),
+        // Same rule for the rest of the wire protocol: bundle the pure
+        // browser-safe source entry, never the Node-flavoured barrel.
+        "@senastr/shared": join(__dirname, "../../packages/shared/src/browser.ts"),
       },
     },
   },
