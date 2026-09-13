@@ -21,6 +21,10 @@ const api = {
     rename: (id: string, title: string) => invoke("session/rename", { id, title }),
     delete: (id: string) => invoke("session/delete", { id }),
     setProject: (id: string, projectPath: string | null) => invoke("session/set-project", { id, projectPath }),
+    appendMessages: (id: string, messages: unknown[]) => invoke("session/append-messages", { id, messages }),
+  },
+  file: {
+    pick: (projectPath?: string | null) => invoke("file/pick", { projectPath }),
   },
   provider: {
     list: () => invoke("provider/list"),

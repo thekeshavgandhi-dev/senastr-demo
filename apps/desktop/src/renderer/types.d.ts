@@ -1,6 +1,7 @@
 import type {
   AgentEvent,
   CapabilityLevel,
+  ChatMessage,
   GrantScope,
   McpServerInput,
   McpServerStatus,
@@ -42,6 +43,10 @@ export interface SenastrApi {
     rename(id: string, title: string): Promise<Session>;
     delete(id: string): Promise<{ ok: boolean }>;
     setProject(id: string, projectPath: string | null): Promise<Session>;
+    appendMessages(id: string, messages: ChatMessage[]): Promise<Session>;
+  };
+  file: {
+    pick(projectPath?: string | null): Promise<string[]>;
   };
   provider: {
     list(): Promise<ProviderSummary[]>;

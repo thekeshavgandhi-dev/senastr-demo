@@ -148,6 +148,20 @@ function setupIpc(): void {
   ipcMain.handle("session/set-project", (_e, p: { id: string; projectPath: string | null }) =>
     req(Methods.sessionSetProject, p),
   );
+  ipcMain.handle(
+    "session/append-messages",
+    (_e, p: { id: string; messages: Session["messages"] }) => req(Methods.sessionAppendMessages, p),
+  );
+  ipcMain.handle("file/pick", async (_e, p: { projectPath?: string | null } = {}) => {
+    if (!win) return [];
+    const opts: Electron.OpenDialogOptions = {
+      title: "Attach files",
+      properties: ["openFile", "multiSelections", "showHiddenFiles"],
+    };
+    if (p?.projectPath && existsSync(p.projectPath)) opts.defaultPath = p.projectPath;
+    const r = await dialog.showOpenDialog(win, opts);
+    return r.canceled ? [] : r.filePaths;
+  });
 
   ipcMain.handle("provider/list", () => req(Methods.providerList));
   ipcMain.handle("provider/set", (_e, p: { provider: ProviderConfig }) => req(Methods.providerSet, p));
