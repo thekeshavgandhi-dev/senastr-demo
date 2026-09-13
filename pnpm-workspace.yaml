@@ -6,3 +6,8 @@ packages:
 # every range to its floor. Pin the intent: `pnpm update` means "newest
 # within range".
 resolutionMode: highest
+
+onlyBuiltDependencies:
+  - electron
+  - esbuild
+  - electron-winstaller
