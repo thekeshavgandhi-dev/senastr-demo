@@ -13,6 +13,7 @@
     "build:packages": "pnpm -r --filter \"./packages/*\" build",
     "dev": "pnpm build:packages && pnpm --filter @senastr/desktop dev",
     "demo": "node scripts/demo.mjs",
+    "postinstall": "node scripts/postinstall.mjs",
     "typecheck": "pnpm build:packages && pnpm -r --filter \"./packages/*\" typecheck && pnpm --filter @senastr/desktop typecheck",
     "test": "pnpm build:packages && vitest run",
     "clean": "pnpm -r --if-present clean"
