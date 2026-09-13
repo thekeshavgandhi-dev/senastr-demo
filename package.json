@@ -1,0 +1,25 @@
+{
+  "name": "senastr",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Local-first AI coding agent desktop workspace",
+  "packageManager": "pnpm@10.14.0",
+  "engines": {
+    "node": ">=22.12.0",
+    "pnpm": ">=10"
+  },
+  "scripts": {
+    "build": "pnpm build:packages && pnpm --filter @senastr/desktop build",
+    "build:packages": "pnpm -r --filter \"./packages/*\" build",
+    "dev": "pnpm build:packages && pnpm --filter @senastr/desktop dev",
+    "demo": "node scripts/demo.mjs",
+    "typecheck": "pnpm build:packages && pnpm -r --filter \"./packages/*\" typecheck && pnpm --filter @senastr/desktop typecheck",
+    "test": "pnpm build:packages && vitest run",
+    "clean": "pnpm -r --if-present clean"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "~5.9.3",
+    "vitest": "^5.0.0"
+  }
+}

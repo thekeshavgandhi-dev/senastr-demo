@@ -1,0 +1,30 @@
+{
+  "name": "hello-senastr",
+  "version": "0.1.0",
+  "description": "Sample plugin: greets a name and prints the project's file count",
+  "author": "senastr",
+  "permissions": {
+    "fs": ["read"],
+    "net": []
+  },
+  "tools": [
+    {
+      "name": "greet",
+      "description": "Print a friendly greeting for the given name",
+      "command": "echo Hello, {name}! Welcome to senastr.",
+      "args": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "description": "Who to greet" }
+        },
+        "required": ["name"]
+      }
+    },
+    {
+      "name": "file_count",
+      "description": "Count the files in the current directory (recursive)",
+      "command": "find . -type f -not -path './.git/*' | wc -l | tr -d ' '",
+      "args": { "type": "object", "properties": {} }
+    }
+  ]
+}
