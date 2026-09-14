@@ -72,7 +72,8 @@ export function PluginsSettings({ store }: { store: SenastrStore }) {
     <div className="settings-page-stack extensions-page">
       <div className="capability-intro"><p>Extensions add tools to the agent through a reviewed declarative manifest.</p><span>Every extension command stays project-confined and goes through senastr's permission gate.</span></div>
       <div className="extensions-toolbar">
-        <div className="settings-segments"><button type="button" className="active">Installed <span>{store.plugins.length}</span></button></div>
+        {/* Single app-level scope: rendered as a static label, not a fake tab. */}
+        <div className="settings-segments"><span className="segment-static">Installed <span>{store.plugins.length}</span></span></div>
         <div className="capability-search"><SettingsIcon name="search" size={14} /><input value={search} placeholder="Search installed extensions" onChange={(event) => setSearch(event.target.value)} />{search ? <button type="button" onClick={() => setSearch("")}><SettingsIcon name="x" size={13} /></button> : null}</div>
         <button type="button" className="settings-ghost-btn" onClick={() => setUrlOpen(true)}><SettingsIcon name="globe" size={14} /> Install from URL</button>
         <button type="button" className="settings-primary-btn" disabled={busy === "install"} onClick={() => void install()}><SettingsIcon name={busy === "install" ? "refresh" : "folder"} size={14} className={busy === "install" ? "spin" : ""} /> {busy === "install" ? "Installing…" : "Install local"}</button>

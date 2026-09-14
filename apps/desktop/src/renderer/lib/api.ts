@@ -1,7 +1,35 @@
 import type { SenastrApi } from "../types";
 
+/**
+ * True when the preload bridge exposed the backend API. When false, the app
+ * renders the "backend not connected" screen instead of a UI whose every
+ * control would silently fail.
+ */
+export function hasBridge(): boolean {
+  return typeof window !== "undefined" && Boolean(window.senastr);
+}
+
+/**
+ * Rejecting stand-in for the bridge, used only if some code path reaches the
+ * API without the bridge (prevents opaque `TypeError: Cannot read properties
+ * of undefined` and surfaces a clear, actionable message instead).
+ */
+function missingBridgeApi(): SenastrApi {
+  const reject = (path: string) => () =>
+    Promise.reject(
+      new Error(`senastr backend is not connected (${path}) — launch the desktop app with \`pnpm dev\` so the preload bridge and host-core sidecar are running`),
+    );
+  const namespace = new Proxy({}, {
+    get: (_ns, group) => {
+      if (typeof group === "symbol" || group === "then") return undefined;
+      return reject(`api.${String(group)}.*`);
+    },
+  });
+  return new Proxy({}, { get: (_t, prop) => (prop === "then" ? undefined : (namespace as never)) }) as SenastrApi;
+}
+
 /** Typed accessor for the preload bridge. */
-export const api: SenastrApi = window.senastr;
+export const api: SenastrApi = hasBridge() ? (window.senastr as SenastrApi) : missingBridgeApi();
 
 /**
  * Main-process invoke rejections arrive as `Error invoking remote method

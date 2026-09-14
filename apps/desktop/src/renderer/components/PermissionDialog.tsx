@@ -13,10 +13,13 @@ function toolIcon(tool: string) {
 export function PermissionDialog({
   request,
   sessionTitle,
+  queueDepth = 1,
   onDecide,
 }: {
   request: PermissionRequest;
   sessionTitle?: string;
+  /** How many permission requests are waiting (this one included). */
+  queueDepth?: number;
   onDecide: (allow: boolean, remember: GrantScope | null) => void;
 }) {
   const [remember, setRemember] = useState<GrantScope | null>(null);
@@ -27,7 +30,10 @@ export function PermissionDialog({
       <div className="perm-head">
         <span className="perm-icon">{toolIcon(request.tool)}</span>
         <div>
-          <div className="perm-title">Permission requested</div>
+          <div className="perm-title">
+            Permission requested
+            {queueDepth > 1 ? ` · ${queueDepth} waiting` : ""}
+          </div>
           {sessionTitle ? <div className="perm-session">{sessionTitle}</div> : null}
         </div>
         <span className="perm-tool-chip">{request.tool}</span>

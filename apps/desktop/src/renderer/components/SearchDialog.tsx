@@ -130,7 +130,7 @@ export function SearchDialog({ store }: { store: SenastrStore }) {
 
   useEffect(() => setIndex(0), [query]);
   useEffect(() => {
-    if (index >= rows.length) setIndex(0);
+    if (index > rows.length) setIndex(0);
   }, [rows.length, index]);
 
   const runRow = (row: Row | undefined) => {
@@ -141,15 +141,23 @@ export function SearchDialog({ store }: { store: SenastrStore }) {
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
+    // The trailing "Open settings" row sits at index rows.length — one past
+    // the action/session rows — so navigation cycles over rows.length + 1.
+    const total = rows.length + 1;
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      setIndex((i) => (rows.length ? (i + 1) % rows.length : 0));
+      setIndex((i) => (i + 1) % total);
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
-      setIndex((i) => (rows.length ? (i - 1 + rows.length) % rows.length : 0));
+      setIndex((i) => (i - 1 + total) % total);
     } else if (e.key === "Enter") {
       e.preventDefault();
-      runRow(rows[index]);
+      if (index === rows.length) {
+        store.setSearchOpen(false);
+        store.setView("settings");
+      } else {
+        runRow(rows[index]);
+      }
     }
   };
 

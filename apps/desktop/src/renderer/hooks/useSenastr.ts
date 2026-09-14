@@ -64,7 +64,7 @@ export function useSenastr() {
   const [busy, setBusy] = useState(false);
   const [stream, setStream] = useState<StreamState | null>(null);
   const [streamSessionId, setStreamSessionId] = useState<string | null>(null);
-  const [pendingPermission, setPendingPermission] = useState<PermissionRequest | null>(null);
+  const [pendingPermissionQueue, setPendingPermissionQueue] = useState<PermissionRequest[]>([]);
   const [pendingAsks, setPendingAsks] = useState<AskRequest[]>([]);
   const [planProposal, setPlanProposal] = useState<PlanProposal | null>(null);
   const [delegations, setDelegations] = useState<Record<string, DelegationSummary[]>>({});
@@ -184,7 +184,9 @@ export function useSenastr() {
                 .catch(() => undefined);
               return;
             }
-            setPendingPermission(request);
+            setPendingPermissionQueue((prev) =>
+              prev.some((r) => r.requestId === request.requestId) ? prev : [...prev, request],
+            );
             return;
           }
           case "notify/added":
@@ -542,7 +544,7 @@ export function useSenastr() {
 
   /** Send implementation shared by send(), retry and queue flush. */
   const flushQueueSend = useCallback(
-    async (session: Session, rawText: string) => {
+    async (session: Session, rawText: string, modeOverride?: SessionMode) => {
       const trimmed = rawText.trim();
       if (!trimmed) return;
       if (inFlightSessionRef.current) {
@@ -563,7 +565,11 @@ export function useSenastr() {
         pushNotice("Open a project folder to get started", "error");
         return;
       }
-      const mode: SessionMode = (sessionPrefs[session.id]?.mode ?? defaultAgentMode) as SessionMode;
+      // An explicit override wins (plan approve/reject must not depend on
+      // stale prefs); otherwise use the session's remembered mode.
+      const mode: SessionMode = (modeOverride ??
+        sessionPrefs[session.id]?.mode ??
+        defaultAgentMode) as SessionMode;
       lastUserTextRef.current = trimmed;
       setLastError(null);
       // Optimistic busy: chat/send resolves before turn/start arrives.
@@ -676,7 +682,7 @@ export function useSenastr() {
       updateSessionPrefs(s.id, { mode: "build" });
       const updated = await api.session.setMode(s.id, "build");
       setActiveSession(updated);
-      await flushQueueSend({ ...updated }, "The plan is approved. Implement it now, step by step.");
+      await flushQueueSend({ ...updated }, "The plan is approved. Implement it now, step by step.", "build");
     } catch (err) {
       pushNotice(cleanError(err), "error");
     }
@@ -698,6 +704,7 @@ export function useSenastr() {
           note
             ? `Plan rejected — revise it with this feedback, then submit the updated plan (do not implement yet):\n\n${note}`
             : "Plan rejected. Revise the plan and submit it again (do not implement yet).",
+          "plan",
         );
       } catch (err) {
         pushNotice(cleanError(err), "error");
@@ -791,16 +798,16 @@ export function useSenastr() {
 
   const respondPermission = useCallback(
     (allow: boolean, remember: GrantScope | null = null) => {
-      const request = pendingPermission;
+      const request = pendingPermissionQueue[0];
       if (!request) return;
-      setPendingPermission(null);
+      setPendingPermissionQueue((prev) => prev.slice(1));
       void api.permission
         .respond({ requestId: request.requestId, allow, remember })
         .then(() => api.permission.list())
         .then(setGrants)
         .catch((err) => pushNotice(cleanError(err), "error"));
     },
-    [pendingPermission, pushNotice],
+    [pendingPermissionQueue, pushNotice],
   );
 
   const refresh = useCallback(async () => {
@@ -844,6 +851,9 @@ export function useSenastr() {
     return { tokens: estimateTokens(messages.map((m) => m.content || "").join("\n")), messages: messages.length, tools, chars };
   }, [activeSession]);
 
+  /** Head of the permission queue — the dialog currently on screen. */
+  const pendingPermission = pendingPermissionQueue[0] ?? null;
+
   return {
     view,
     setView,
@@ -859,6 +869,7 @@ export function useSenastr() {
     stream,
     streamSessionId,
     pendingPermission,
+    pendingPermissionCount: pendingPermissionQueue.length,
     pendingAsks,
     planProposal,
     delegations,

@@ -164,7 +164,7 @@ export interface SenastrApi {
 
 declare global {
   interface Window {
-    senastr: SenastrApi;
+    senastr?: SenastrApi;
   }
 }
 

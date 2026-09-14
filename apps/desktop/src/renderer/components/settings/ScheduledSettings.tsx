@@ -20,6 +20,16 @@ export function ScheduledSettings({ store }: { store: SenastrStore }) {
   const [editor, setEditor] = useState<ScheduledTask | "new" | null>(null);
   const [runsFor, setRunsFor] = useState<ScheduledTask | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [filter, setFilter] = useState<"all" | "global" | "project">("all");
+  const activeProject = store.activeSession?.projectPath ?? null;
+
+  const visible = useMemo(
+    () =>
+      tasks.filter((task) =>
+        filter === "all" ? true : filter === "global" ? !task.projectPath : task.projectPath === activeProject,
+      ),
+    [tasks, filter, activeProject],
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -96,7 +106,18 @@ export function ScheduledSettings({ store }: { store: SenastrStore }) {
       </div>
       <div className="capability-toolbar">
         <div className="settings-segments">
-          <button type="button" className="active">All <span>{tasks.length}</span></button>
+          {(["all", "global", "project"] as const).map((item) => (
+            <button type="button" key={item} className={filter === item ? "active" : ""} onClick={() => setFilter(item)}>
+              {capitalize(item)}{" "}
+              <span>
+                {item === "all"
+                  ? tasks.length
+                  : tasks.filter((task) =>
+                      item === "global" ? !task.projectPath : task.projectPath === activeProject,
+                    ).length}
+              </span>
+            </button>
+          ))}
         </div>
         <span className="capability-toolbar-spacer" />
         <button type="button" className="settings-primary-btn" onClick={() => setEditor("new")}><SettingsIcon name="plus" size={14} /> New task</button>
@@ -108,7 +129,7 @@ export function ScheduledSettings({ store }: { store: SenastrStore }) {
           <div className="capability-group-empty">No scheduled tasks yet.</div>
         ) : (
           <div className="capability-group">
-            {tasks.map((task) => (
+            {visible.map((task) => (
               <div className={`capability-row ${task.enabled ? "" : "off"}`} key={task.id}>
                 <span className={`capability-glyph status-${task.lastStatus ?? "idle"}`}><SettingsIcon name="terminal" size={16} /></span>
                 <div className="capability-copy">
@@ -265,6 +286,8 @@ function RunsModal({ task, onClose }: { task: ScheduledTask; onClose: () => void
     </Modal>
   );
 }
+
+function capitalize(value: string): string { return value.slice(0, 1).toUpperCase() + value.slice(1); }
 
 function shortPath(path: string): string {
   const parts = path.split(/[\\/]/).filter(Boolean);
