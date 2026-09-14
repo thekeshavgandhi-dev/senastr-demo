@@ -60,6 +60,8 @@ let shuttingDown = false;
 const notifications: AppNotification[] = [];
 let schedulerTimer: NodeJS.Timeout | null = null;
 let schedulerBusy = false;
+/** Task ids with a manual ("Run now") run already in flight. */
+const manuallyRunningTasks = new Set<string>();
 
 function log(...args: unknown[]): void {
   console.log("[senastr/main]", ...args);
@@ -394,6 +396,7 @@ async function schedulerTick(): Promise<void> {
     const due = tasks.filter((t) => t.enabled && typeof t.nextRunAt === "number" && t.nextRunAt <= now);
     for (const task of due.slice(0, 2)) {
       if (shuttingDown) break;
+      if (manuallyRunningTasks.has(task.id)) continue; // a manual run is in flight
       await runScheduledTask(host, task);
     }
   } catch (err) {
@@ -496,7 +499,11 @@ function setupIpc(): void {
     const tasks = await host.request<ScheduledTask[]>(Methods.scheduledList, {});
     const task = tasks.find((t) => t.id === p.id);
     if (!task) throw new Error("scheduled task not found");
-    void runScheduledTask(host, task);
+    if (manuallyRunningTasks.has(task.id)) {
+      return { ok: false, alreadyRunning: true };
+    }
+    manuallyRunningTasks.add(task.id);
+    void runScheduledTask(host, task).finally(() => manuallyRunningTasks.delete(task.id));
     return { ok: true };
   });
 
@@ -674,6 +681,25 @@ function createWindow(): void {
 
   win.on("closed", () => {
     win = null;
+  });
+
+  // Links inside chat markdown (target="_blank") must open in the user's
+  // browser, not in a new Electron window. Anything that is not http(s) is
+  // refused outright.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) {
+      void shell.openExternal(url);
+    }
+    return { action: "deny" };
+  });
+  // Block top-level navigations away from the app shell (e.g. a crafted
+  // markdown link with target=_self).
+  win.webContents.on("will-navigate", (event, url) => {
+    const devUrl = process.env.ELECTRON_RENDERER_URL;
+    if (app.isPackaged || !devUrl || !url.startsWith(devUrl)) {
+      event.preventDefault();
+      if (/^https?:\/\//i.test(url)) void shell.openExternal(url);
+    }
   });
 }
 

@@ -124,10 +124,12 @@ export class ScheduledService {
   recordRun(run: Omit<ScheduledRun, "id"> & { id?: string }): ScheduledRun {
     const full: ScheduledRun = { ...run, id: run.id || randomUUID() };
     this.runs.update((all) => {
-      const kept = [...all.filter((r) => r.taskId !== full.taskId), full]
-        .filter((r) => r.taskId === full.taskId)
-        .slice(-MAX_RUNS_PER_TASK);
-      return [...all.filter((r) => r.taskId !== full.taskId), ...kept];
+      // Keep the most recent MAX_RUNS_PER_TASK runs *per task* — history for
+      // one task must never evict another task's runs.
+      const sameTask = all.filter((r) => r.taskId === full.taskId);
+      const others = all.filter((r) => r.taskId !== full.taskId);
+      const kept = [...sameTask, full].slice(-MAX_RUNS_PER_TASK);
+      return [...others, ...kept];
     });
     const task = this.tasks.get().find((t) => t.id === full.taskId);
     if (task) {

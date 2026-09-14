@@ -76,6 +76,7 @@ export default function App() {
           <PermissionDialog
             request={s.pendingPermission}
             sessionTitle={s.activeSession?.title}
+            queueDepth={s.pendingPermissionCount}
             onDecide={(allow, remember) => s.respondPermission(allow, remember)}
           />
         )}
@@ -104,6 +105,7 @@ export default function App() {
         <PermissionDialog
           request={s.pendingPermission}
           sessionTitle={s.activeSession?.title}
+          queueDepth={s.pendingPermissionCount}
           onDecide={(allow, remember) => s.respondPermission(allow, remember)}
         />
       )}
