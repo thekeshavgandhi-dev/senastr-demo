@@ -940,3 +940,47 @@ describe("chat shell — onboarding + global shortcuts", () => {
     await waitFor(() => expect(backend.sessions.size).toBe(2));
   }, 20_000);
 });
+
+describe("chat shell — settings dead-control regressions", () => {
+  it("scheduled segments filter tasks by scope", async () => {
+    const backend = freshBackend();
+    await seedSession(backend, { title: "Scoped" });
+    await backend.scheduled.set({
+      title: "Project task", prompt: "p", projectPath: PROJECT, providerId: "p1", model: "gpt-test",
+    });
+    await backend.scheduled.set({
+      title: "Global task", prompt: "p", projectPath: "", providerId: "p1", model: "gpt-test",
+    });
+    await renderApp(backend);
+
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Scheduled" }));
+    expect(await screen.findByText("Project task")).toBeInTheDocument();
+    expect(screen.getByText("Global task")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /^Global/ }));
+    await waitFor(() => expect(screen.queryByText("Project task")).not.toBeInTheDocument());
+    expect(screen.getByText("Global task")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /^Project/ }));
+    await waitFor(() => expect(screen.queryByText("Global task")).not.toBeInTheDocument());
+    expect(screen.getByText("Project task")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /^All/ }));
+    await waitFor(() => expect(screen.getByText("Global task")).toBeInTheDocument());
+    expect(screen.getByText("Project task")).toBeInTheDocument();
+  }, 20_000);
+
+  it("extensions toolbar shows a static scope label instead of a dead tab", async () => {
+    const backend = freshBackend();
+    await seedSession(backend);
+    await renderApp(backend);
+
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Extensions" }));
+
+    const seg = (await screen.findByText("Installed")).closest(".settings-segments") as HTMLElement;
+    expect(seg.querySelector("button")).toBeNull();
+    expect(seg.querySelector(".segment-static")).toBeTruthy();
+  }, 20_000);
+});

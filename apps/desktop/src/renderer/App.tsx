@@ -11,8 +11,35 @@ import { PermissionDialog } from "./components/PermissionDialog";
 import { SearchDialog } from "./components/SearchDialog";
 import { ToastHost } from "./components/Toast";
 import { WorkPanel } from "./components/workpanel/WorkPanel";
+import { hasBridge } from "./lib/api";
 
 export default function App() {
+  // Without the preload bridge there is no backend: render an explicit
+  // "not connected" screen instead of a UI whose every control would fail.
+  if (!hasBridge()) return <BridgeMissing />;
+  return <AppShell />;
+}
+
+function BridgeMissing() {
+  return (
+    <div className="app bridge-missing" role="alert">
+      <div className="bridge-missing-card">
+        <div className="brand-mark">s</div>
+        <h1>senastr backend is not connected</h1>
+        <p>
+          This window was loaded without the desktop host, so every action (sending prompts,
+          opening projects, settings — all of it) has nothing to talk to.
+        </p>
+        <ul>
+          <li>Run the desktop app with <code>pnpm dev</code> (Electron loads the preload bridge and starts the host-core sidecar).</li>
+          <li>If the window is part of the packaged app, reinstall or repair it — the bridge script is missing.</li>
+        </ul>
+      </div>
+    </div>
+  );
+}
+
+function AppShell() {
   const s = useSenastr();
 
   // Apply theme + font scale to the document root.

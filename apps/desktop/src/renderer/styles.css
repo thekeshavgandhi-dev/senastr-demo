@@ -1356,6 +1356,8 @@ input, textarea, select { font: inherit; color: var(--text); }
 .settings-segments button:hover { color: var(--text); }
 .settings-segments button.active { color: var(--text); background: var(--settings-line); box-shadow: 0 1px 2px rgba(0,0,0,.25); }
 .settings-segments button span { color: var(--st-seg-sub); font-size: 10px; }
+.settings-segments .segment-static { height: 24px; padding: 0 9px; display: flex; align-items: center; gap: 6px; border-radius: 6px; background: var(--settings-line); box-shadow: 0 1px 2px rgba(0,0,0,.25); color: var(--text); font-size: 11px; }
+.settings-segments .segment-static span { color: var(--st-seg-sub); font-size: 10px; }
 .capability-search { flex: 1; min-width: 100px; }
 .capability-search input { height: 32px; padding: 0 29px 0 31px; }
 .capability-panel { min-height: 140px; }
@@ -1656,3 +1658,11 @@ input, textarea, select { font: inherit; color: var(--text); }
 .settings-badge.ok { color: var(--ok); border-color: rgba(66, 180, 160, 0.4); }
 .settings-error { color: var(--fail); font-size: 13px; }
 .skill-content-editor.short { min-height: 110px; }
+
+/* backend-not-connected screen */
+.bridge-missing { display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 24px; }
+.bridge-missing-card { max-width: 520px; display: flex; flex-direction: column; gap: 12px; padding: 28px; border: 1px solid var(--settings-line, #333); border-radius: 14px; background: var(--settings-card, rgba(255,255,255,.03)); }
+.bridge-missing-card h1 { font-size: 16px; margin: 0; }
+.bridge-missing-card p { margin: 0; font-size: 12.5px; line-height: 1.55; color: var(--text-faint, #999); }
+.bridge-missing-card ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; line-height: 1.5; color: var(--text-faint, #999); }
+.bridge-missing-card code { padding: 1px 5px; border-radius: 5px; background: var(--settings-line, #333); font-size: 11.5px; }
