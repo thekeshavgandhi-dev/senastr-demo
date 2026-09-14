@@ -24,6 +24,11 @@ export interface SubagentQuery {
 export class SubagentService {
   private readonly store: JsonFileStore<SubagentRecord[]>;
 
+  /** Wait for queued writes (used on shutdown and in tests). */
+  async flush(): Promise<void> {
+    await this.store.flush();
+  }
+
   constructor(dataDir: string) {
     this.store = new JsonFileStore<SubagentRecord[]>(join(dataDir, "subagents.json"), []);
   }

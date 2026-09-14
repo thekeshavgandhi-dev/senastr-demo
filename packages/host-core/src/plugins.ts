@@ -41,6 +41,11 @@ interface InstalledPlugin {
 export class PluginService {
   private installed: JsonFileStore<Record<string, InstalledPlugin>>;
 
+  /** Wait for queued writes (used on shutdown and in tests). */
+  async flush(): Promise<void> {
+    await this.installed.flush();
+  }
+
   constructor(private readonly dataDir: string) {
     this.installed = new JsonFileStore<Record<string, InstalledPlugin>>(
       join(dataDir, "plugins.json"),

@@ -26,6 +26,9 @@ describe("tool catalog", () => {
     expect([...builtinToolNames()].sort()).toEqual([
       "Task",
       "ask_user",
+      "edit_file",
+      "glob",
+      "grep",
       "list_dir",
       "read_file",
       "run_command",

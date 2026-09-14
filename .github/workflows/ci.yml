@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Build, typecheck, test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        run: pnpm build:packages
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Unit + UI tests
+        run: pnpm test
+
+      - name: Headless host-core demo (protocol end-to-end)
+        run: pnpm demo
+
+      - name: Parity audit against the reference app's feature set
+        run: node scripts/verify-parity.mjs
+
+      - name: Bundle the host-core sidecar (packaging path)
+        run: pnpm bundle:host
+
+      - name: Verify packaging config + standalone sidecar
+        run: pnpm verify:packaging
+
+      - name: Build the desktop app (electron-vite)
+        run: pnpm --filter @senastr/desktop build
+
+  e2e:
+    name: Electron end-to-end smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build (packages + bundled sidecar + desktop app)
+        run: pnpm build && pnpm bundle:host
+
+      - name: Boot the real app and assert it comes up healthy
+        run: xvfb-run --auto-servernum pnpm test:e2e --report ./e2e-report/report.json
+
+      - name: Upload screenshot evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-report
+          path: e2e-report
+          if-no-files-found: ignore

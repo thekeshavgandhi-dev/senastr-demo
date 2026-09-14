@@ -85,16 +85,23 @@ function main(): void {
   });
 
   let shuttingDown = false;
-  const shutdown = (signal: string): void => {
+  const flushables = [providers, permissions, plugins, skills, mcp, subagents, scheduled, instructionService];
+  const shutdown = async (signal: string): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
     process.stderr.write(`[senastr/host-core] ${signal} — shutting down\n`);
+    // Persist every queued write before leaving so a quit never drops the
+    // last message, grant or plugin record.
+    await Promise.race([
+      Promise.all(flushables.map((service) => service.flush().catch(() => undefined))),
+      new Promise((resolve) => setTimeout(resolve, 2000)),
+    ]);
     mcp.dispose();
     server.close();
     process.exit(0);
   };
-  process.on("SIGTERM", () => shutdown("SIGTERM"));
-  process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
+  process.on("SIGINT", () => void shutdown("SIGINT"));
 
   server.start();
   process.stderr.write(

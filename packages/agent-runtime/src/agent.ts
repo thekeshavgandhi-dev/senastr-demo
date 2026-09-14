@@ -19,6 +19,7 @@ import {
 } from "@senastr/shared";
 import type { AgentOptions, HostBridge, ModelSpec, Provider } from "./types";
 import { createProvider } from "./providers/factory";
+import { compactHistory, type CompactResult } from "./context";
 import { defaultSystemPrompt } from "./messages";
 
 export interface TurnParams {
@@ -44,7 +45,7 @@ interface PendingAsk {
 export const PLAN_MODE_PROMPT = [
   "",
   "PLAN MODE: you are planning, not executing.",
-  "- Investigate with read-only tools (read_file, list_dir).",
+  "- Investigate with read-only tools (read_file, glob, grep, list_dir).",
   "- Do NOT write files, run commands, or spawn subagents; those calls will be rejected.",
   "- You may call ask_user when a decision blocks the plan.",
   "- When the plan is complete, call submit_plan exactly once with the full plan.",
@@ -101,6 +102,7 @@ export class AgentRuntime {
     const usage: Usage = {};
     let stopReason: TurnStopReason = "stop";
     let errorText: string | undefined;
+    let compaction: CompactResult = { messages: [], dropped: 0, truncated: false };
 
     try {
       yield { type: "turn/start", sessionId: session.id, turnId: randomUUID() };
@@ -114,6 +116,9 @@ export class AgentRuntime {
         const tools = await this.host.listTools(session.id);
         const riskByName = new Map(tools.map((t) => [t.name, t.risk]));
         const history = (await this.host.getSession(session.id)).messages;
+        // The transcript on disk is the durable record; the model only ever
+        // sees a bounded window so long sessions cannot overflow the context.
+        compaction = compactHistory(history, this.opts.contextCharBudget);
         const skills = this.host.listSkills ? await this.host.listSkills(session.projectPath) : [];
         const contexts = await this.loadProjectContexts(session.projectPath);
         let system = withActiveSkills(defaultSystemPrompt(session.projectPath!), skills);
@@ -126,7 +131,7 @@ export class AgentRuntime {
         for await (const evt of provider.streamChat({
           model: params.model.model,
           system,
-          messages: history,
+          messages: compaction.messages,
           tools: planMode ? tools.filter((t) => t.name !== "Task") : tools,
           signal: abort.signal,
         })) {
@@ -224,7 +229,16 @@ export class AgentRuntime {
     } finally {
       this.active.delete(session.id);
       this.failSessionAsks(session.id);
-      yield { type: "turn/end", stopReason, usage, error: errorText };
+      yield {
+        type: "turn/end",
+        stopReason,
+        usage,
+        error: errorText,
+        compaction:
+          compaction.dropped > 0 || compaction.truncated
+            ? { dropped: compaction.dropped, truncated: compaction.truncated }
+            : undefined,
+      };
     }
   }
 
@@ -504,10 +518,11 @@ export class AgentRuntime {
       turns += 1;
       let text = "";
       const calls: ToolCall[] = [];
+      const window = compactHistory(history, this.opts.contextCharBudget);
       for await (const evt of provider.streamChat({
         model: opts.model.model,
         system,
-        messages: history,
+        messages: window.messages,
         tools: opts.tools,
         signal: opts.parentSignal,
       })) {

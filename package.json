@@ -9,7 +9,7 @@
     "pnpm": ">=10"
   },
   "scripts": {
-    "build": "pnpm build:packages && pnpm --filter @senastr/desktop build",
+    "build": "pnpm build:packages && pnpm bundle:host && pnpm --filter @senastr/desktop build",
     "build:packages": "pnpm -r --filter \"./packages/*\" build",
     "dev": "pnpm build:packages && pnpm --filter @senastr/desktop dev",
     "demo": "node scripts/demo.mjs",
@@ -18,7 +18,10 @@
     "test": "pnpm build:packages && vitest run",
     "test:ui": "vitest run --project desktop-ui",
     "test:watch": "vitest",
-    "clean": "pnpm -r --if-present clean"
+    "clean": "pnpm -r --if-present clean",
+    "bundle:host": "node scripts/bundle-host.mjs",
+    "test:e2e": "node scripts/e2e-electron-boot.mjs",
+    "verify:packaging": "node scripts/verify-packaging.mjs"
   },
   "devDependencies": {
     "@testing-library/dom": "^10.4.2",
@@ -28,6 +31,7 @@
     "@types/node": "^22.10.0",
     "jsdom": "^26.1.0",
     "typescript": "~5.9.3",
-    "vitest": "^5.0.0"
+    "vitest": "^5.0.0",
+    "esbuild": "^0.25.0"
   }
 }

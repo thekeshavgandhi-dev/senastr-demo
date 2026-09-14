@@ -1,7 +1,18 @@
-import { app, BrowserWindow, Notification, dialog, ipcMain, shell } from "electron";
+import {
+  app,
+  BrowserWindow,
+  Menu,
+  Notification,
+  Tray,
+  dialog,
+  ipcMain,
+  nativeImage,
+  safeStorage,
+  shell,
+} from "electron";
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { randomBytes, randomUUID } from "node:crypto";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
   AgentRuntime,
@@ -62,6 +73,13 @@ let schedulerTimer: NodeJS.Timeout | null = null;
 let schedulerBusy = false;
 /** Task ids with a manual ("Run now") run already in flight. */
 const manuallyRunningTasks = new Set<string>();
+
+/** Tray residency: closing the window hides it instead of quitting so a long
+ *  agent run (or a scheduled task) is never killed by an accidental close.
+ *  The tray menu can turn this off and quit explicitly. */
+let tray: Tray | null = null;
+let quitting = false;
+let closeToTray = true;
 
 function log(...args: unknown[]): void {
   console.log("[senastr/main]", ...args);
@@ -125,15 +143,44 @@ class RpcHostBridge implements HostBridge {
   }
 }
 
+/**
+ * Protect the host's credential-encryption key with the OS keychain.
+ *
+ * host-core encrypts provider keys and MCP secrets at rest. The key itself is
+ * random per machine; Electron `safeStorage` (Keychain / DPAPI / libsecret)
+ * wraps it so the file alone is not enough to read the credentials. When the
+ * OS has no keyring available the host falls back to its own 0600 key file.
+ */
+function hostSecretKey(): string | undefined {
+  if (process.env.SENASTR_SECRET_KEY) return process.env.SENASTR_SECRET_KEY;
+  try {
+    if (!safeStorage.isEncryptionAvailable()) return undefined;
+    const keyPath = join(app.getPath("userData"), "secret.key.safe");
+    if (existsSync(keyPath)) {
+      const wrapped = readFileSync(keyPath);
+      return safeStorage.decryptString(wrapped);
+    }
+    const fresh = randomBytes(32).toString("base64");
+    writeFileSync(keyPath, safeStorage.encryptString(fresh), { mode: 0o600 });
+    return fresh;
+  } catch (err) {
+    log("keychain unavailable, host-core will use its local key file:", err instanceof Error ? err.message : err);
+    return undefined;
+  }
+}
+
 async function startHost(): Promise<NdjsonRpcClient> {
   const dataDir = process.env.SENASTR_DATA_DIR ?? join(app.getPath("userData"), "data");
   const script = resolveHostScript();
+  const secretKey = hostSecretKey();
   const client = new NdjsonRpcClient({
     // ELECTRON_RUN_AS_NODE: run the bundled Electron runtime as plain Node —
     // no separate Node install needed in dev or in the packaged app.
     command: process.execPath,
     args: [script, "--data-dir", dataDir],
-    env: { ELECTRON_RUN_AS_NODE: "1" },
+    env: secretKey
+      ? { ELECTRON_RUN_AS_NODE: "1", SENASTR_SECRET_KEY: secretKey }
+      : { ELECTRON_RUN_AS_NODE: "1" },
     onNotification: (method, params) => {
       if (method === "permission/requested") {
         sendToRenderer({
@@ -655,6 +702,127 @@ function setupIpc(): void {
   );
 }
 
+function trayIconPath(): string {
+  const candidates = [
+    join(process.resourcesPath ?? "", "icon.png"),
+    resolve(__dirname, "../../resources/icon.png"),
+  ];
+  return candidates.find((candidate) => existsSync(candidate)) ?? "";
+}
+
+function toggleWindow(): void {
+  if (!win) {
+    createWindow();
+    return;
+  }
+  if (win.isVisible()) win.hide();
+  else {
+    win.show();
+    win.focus();
+  }
+}
+
+/**
+ * End-to-end smoke hook (scripts/e2e-electron-boot.mjs). Runs only when SENASTR_E2E is
+ * set: it waits for the real window to finish loading against the real
+ * host-core sidecar, asserts the renderer actually mounted the app shell,
+ * captures a screenshot and writes a JSON report for the CI script to read.
+ * Never active in a normal run.
+ */
+function runE2eSmoke(target: BrowserWindow): void {
+  const outFile = process.env.SENASTR_E2E_REPORT || join(app.getPath("temp"), "senastr-e2e.json");
+  const checks: Array<{ name: string; ok: boolean; detail?: string }> = [];
+  const consoleErrors: string[] = [];
+
+  target.webContents.on("console-message", (_e, level, message) => {
+    if (level >= 3) consoleErrors.push(message);
+  });
+
+  const finish = async (): Promise<void> => {
+    try {
+      const probe = (await target.webContents.executeJavaScript(`(() => {
+        const app = document.querySelector(".app");
+        return {
+          hasShell: Boolean(app),
+          bridgeMissing: Boolean(document.querySelector(".bridge-missing")),
+          toolbar: Boolean(document.querySelector("header, .topbar, .toolbar")),
+          text: (document.body.innerText || "").slice(0, 400),
+          channels: Object.keys(window.senastr ?? {}).length,
+        };
+      })()`)) as {
+        hasShell: boolean;
+        bridgeMissing: boolean;
+        toolbar: boolean;
+        text: string;
+        channels: number;
+      };
+
+      checks.push({ name: "renderer mounted the app shell", ok: probe.hasShell });
+      checks.push({ name: "preload bridge is present (no BridgeMissing gate)", ok: !probe.bridgeMissing, detail: `${probe.channels} namespaces` });
+      checks.push({ name: "window chrome rendered", ok: probe.toolbar });
+      checks.push({ name: "host-core sidecar answered (session list rendered)", ok: !/host-core failed|not ready/i.test(probe.text), detail: probe.text.replace(/\s+/g, " ").slice(0, 160) });
+      checks.push({ name: "no renderer console errors", ok: consoleErrors.length === 0, detail: consoleErrors.slice(0, 3).join(" | ") });
+
+      const image = await target.webContents.capturePage();
+      const shot = outFile.replace(/\.json$/, ".png");
+      writeFileSync(shot, image.toPNG());
+
+      const ok = checks.every((c) => c.ok);
+      writeFileSync(outFile, JSON.stringify({ ok, checks, screenshot: shot }, null, 2));
+      console.log(`[e2e] ${ok ? "PASS" : "FAIL"} → ${outFile}`);
+      for (const c of checks) console.log(`[e2e] ${c.ok ? "ok  " : "FAIL"} ${c.name}${c.detail ? ` — ${c.detail}` : ""}`);
+      quitting = true;
+      app.exit(ok ? 0 : 1);
+    } catch (err) {
+      writeFileSync(outFile, JSON.stringify({ ok: false, checks, error: String(err) }, null, 2));
+      console.log(`[e2e] FAIL — ${String(err)}`);
+      quitting = true;
+      app.exit(1);
+    }
+  };
+
+  target.webContents.once("did-finish-load", () => {
+    // Give the renderer a beat to run its first IPC round-trips (session list,
+    // tool catalog) before probing.
+    setTimeout(() => void finish(), Number(process.env.SENASTR_E2E_SETTLE_MS ?? 2500));
+  });
+}
+
+function createTray(): void {
+  const iconPath = trayIconPath();
+  const image = iconPath ? nativeImage.createFromPath(iconPath).resize({ width: 18, height: 18 }) : nativeImage.createEmpty();
+  tray = new Tray(image);
+  tray.setToolTip("senastr — local-first coding agent");
+  const render = (): void => {
+    tray?.setContextMenu(
+      Menu.buildFromTemplate([
+        { label: "Show senastr", click: () => toggleWindow() },
+        { label: "New task", click: () => { if (!win) createWindow(); win?.show(); win?.focus(); sendToRenderer({ kind: "tray/new-task" }); } },
+        { type: "separator" },
+        {
+          label: "Close to tray",
+          type: "checkbox",
+          checked: closeToTray,
+          click: (item) => {
+            closeToTray = item.checked;
+            render();
+          },
+        },
+        { type: "separator" },
+        {
+          label: "Quit senastr",
+          click: () => {
+            quitting = true;
+            app.quit();
+          },
+        },
+      ]),
+    );
+  };
+  render();
+  tray.on("click", () => toggleWindow());
+}
+
 function createWindow(): void {
   win = new BrowserWindow({
     width: 1280,
@@ -678,6 +846,20 @@ function createWindow(): void {
   } else {
     void win.loadFile(join(__dirname, "../renderer/index.html"));
   }
+
+  win.on("close", (event) => {
+    if (quitting || !closeToTray) return;
+    event.preventDefault();
+    win?.hide();
+    if (!app.isPackaged) return;
+    if (Notification.isSupported()) {
+      new Notification({
+        title: "senastr is still running",
+        body: "Background work continues. Use the tray icon to reopen or quit.",
+        silent: true,
+      }).show();
+    }
+  });
 
   win.on("closed", () => {
     win = null;
@@ -723,16 +905,21 @@ if (!app.requestSingleInstanceLock()) {
     setupIpc();
     startScheduler();
     createWindow();
+    createTray();
+    if (process.env.SENASTR_E2E && win) runE2eSmoke(win);
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
     });
   });
 
   app.on("window-all-closed", () => {
-    if (process.platform !== "darwin") app.quit();
+    // Stay resident in the tray (macOS keeps the app alive without windows by
+    // convention; the tray makes the same true everywhere).
+    if (process.platform !== "darwin" && !closeToTray) app.quit();
   });
 
   app.on("before-quit", () => {
+    quitting = true;
     shuttingDown = true;
     if (schedulerTimer) clearInterval(schedulerTimer);
     try {
