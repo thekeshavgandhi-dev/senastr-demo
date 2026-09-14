@@ -174,6 +174,14 @@ input, textarea, select { font: inherit; color: var(--text); }
 .btn.ghost.primary, .btn.ghost:hover { color: var(--text); }
 .btn.small { padding: 4px 9px; font-size: 12px; text-align: center; }
 
+/* Visible keyboard focus everywhere — buttons currently have no ring, so
+   keyboard users can't tell where they are. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.menu-panel:focus-visible, .modal-panel:focus-visible { outline: none; }
+
 .icon-btn {
   width: 30px; height: 30px; flex: 0 0 auto;
   display: inline-grid; place-items: center;
@@ -229,17 +237,21 @@ input, textarea, select { font: inherit; color: var(--text); }
   position: fixed; inset: 0; z-index: 150;
   background: var(--overlay);
   display: flex; align-items: flex-start; justify-content: center;
-  padding: 12vh 20px 20px;
+  padding: 9vh 20px 24px;
   animation: overlay-in 0.12s ease-out;
 }
 @keyframes overlay-in { from { opacity: 0; } }
 .modal-panel {
-  width: 480px; max-width: calc(100vw - 40px); max-height: calc(100vh - 20vh);
-  display: flex; flex-direction: column; overflow: hidden;
+  width: 480px; max-width: calc(100vw - 40px);
+  max-height: calc(100vh - 9vh - 24px);
+  display: flex; flex-direction: column;
+  overflow-y: auto; overflow-x: hidden;
+  overscroll-behavior: contain;
   background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 14px;
   box-shadow: var(--shadow); padding: 18px;
   animation: modal-in 0.13s ease-out;
 }
+.modal-panel:focus { outline: none; }
 .modal-panel.wide { width: 720px; }
 @keyframes modal-in { from { opacity: 0; transform: translateY(6px) scale(0.99); } }
 
@@ -1145,7 +1157,7 @@ input, textarea, select { font: inherit; color: var(--text); }
 .settings-modal-overlay {
   position: fixed;
   inset: 0;
-  z-index: 80;
+  z-index: 120;
   display: grid;
   place-items: center;
   padding: 34px;

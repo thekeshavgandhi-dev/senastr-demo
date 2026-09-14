@@ -70,7 +70,7 @@ export function AskDialog({
         {request.questions.map((q) => {
           const isSkipped = !!skipped[q.id];
           return (
-            <fieldset key={q.id} className={cx("ask-q", isSkipped && "skipped")} disabled={isSkipped}>
+            <fieldset key={q.id} className={cx("ask-q", isSkipped && "skipped")} aria-disabled={isSkipped}>
               <div className="ask-q-head">
                 <div>
                   {q.header ? <legend className="ask-q-header">{q.header}</legend> : null}
