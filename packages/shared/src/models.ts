@@ -298,7 +298,14 @@ export type AgentEvent =
   | { type: "assistant/delta"; delta: string }
   | { type: "tool/call"; call: ToolCall }
   | { type: "tool/result"; callId: string; ok: boolean; result: ToolResult }
-  | { type: "turn/end"; stopReason: TurnStopReason; usage: Usage; error?: string }
+  | {
+      type: "turn/end";
+      stopReason: TurnStopReason;
+      usage: Usage;
+      error?: string;
+      /** Present when the request window had to drop or trim history. */
+      compaction?: { dropped: number; truncated: boolean };
+    }
   | { type: "ask/request"; request: AskRequest }
   | { type: "ask/resolved"; requestId: string; sessionId: string }
   | { type: "plan/proposed"; sessionId: string; proposal: PlanProposal }

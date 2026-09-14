@@ -12,6 +12,7 @@ import {
   type ToolDefinition,
   type ToolParameters,
 } from "@senastr/shared";
+import { SecretBox, isEncryptedValue } from "./secrets";
 import { JsonFileStore } from "./store";
 
 export const MASKED_SECRET = "••••••";
@@ -54,8 +55,53 @@ export class McpService {
   private readonly statuses = new Map<string, McpServerStatus>();
   private readonly routes = new Map<string, { serverId: string; toolName: string }>();
 
-  constructor(dataDir: string) {
+  private readonly secrets: SecretBox;
+
+  constructor(dataDir: string, secrets?: SecretBox) {
+    this.secrets = secrets ?? new SecretBox(dataDir);
     this.store = new JsonFileStore<McpServerConfig[]>(join(dataDir, "mcp-servers.json"), []);
+    this.migratePlaintextSecrets();
+  }
+
+  /** Encrypt env/header values that older builds stored in cleartext. */
+  private migratePlaintextSecrets(): void {
+    const stored = this.store.get();
+    let changed = false;
+    const next = stored.map((server) => {
+      if (!this.secrets.mapNeedsEncryption(server.env) && !this.secrets.mapNeedsEncryption(server.headers)) {
+        return server;
+      }
+      changed = true;
+      return {
+        ...server,
+        env: this.secrets.encryptMap(server.env),
+        headers: this.secrets.encryptMap(server.headers),
+      };
+    });
+    if (changed) this.store.update(() => next);
+  }
+
+  /** Decrypt a stored record for internal use (spawning, HTTP calls). */
+  /** Wait for queued writes (used on shutdown and in tests). */
+  async flush(): Promise<void> {
+    await this.store.flush();
+  }
+
+  private reveal(server: McpServerConfig): McpServerConfig {
+    return {
+      ...server,
+      env: this.secrets.decryptMap(server.env),
+      headers: this.secrets.decryptMap(server.headers),
+    };
+  }
+
+  /** Encrypt a record's secret maps before persisting. */
+  private protect(server: McpServerConfig): McpServerConfig {
+    return {
+      ...server,
+      env: this.secrets.encryptMap(server.env),
+      headers: this.secrets.encryptMap(server.headers),
+    };
   }
 
   list(query: McpQuery = {}): McpServerSummary[] {
@@ -70,6 +116,7 @@ export class McpService {
         }
         return true;
       })
+      .map((server) => this.reveal(server))
       .sort((a, b) => a.label.localeCompare(b.label))
       .map(maskServer);
   }
@@ -87,13 +134,15 @@ export class McpService {
         (!!projectPath && normalizeProjectPath(candidate.projectPath) === projectPath);
     });
     if (!server) throw new RpcError(ErrorCodes.HOST_ERROR, `MCP server not found: ${id}`);
-    return { ...server, env: cloneMap(server.env), headers: cloneMap(server.headers) };
+    const revealed = this.reveal(server);
+    return { ...revealed, env: cloneMap(revealed.env), headers: cloneMap(revealed.headers) };
   }
 
   set(input: McpServerInput): McpServerSummary {
     const id = requireId(input?.id);
-    const existing = this.store.get().find((server) => server.id === id);
-    const next = validateServer(input, existing);
+    const storedExisting = this.store.get().find((server) => server.id === id);
+    const existing = storedExisting ? this.reveal(storedExisting) : undefined;
+    const next = this.protect(validateServer(input, existing));
     const duplicate = this.store.get().find(
       (server) => server.id !== existing?.id && server.id === next.id,
     );
@@ -113,7 +162,7 @@ export class McpService {
 
   setEnabled(id: string, enabled: boolean, query: McpQuery = {}): McpServerSummary {
     const current = this.get(id, query);
-    const next = { ...current, enabled, updatedAt: Date.now() };
+    const next = this.protect({ ...current, enabled, updatedAt: Date.now() });
     this.store.update((all) => all.map((server) => (server.id === id ? next : server)));
     if (!enabled) this.dropConnection(id);
     this.statuses.set(id, idleStatus(id));
@@ -203,7 +252,10 @@ export class McpService {
 
   private active(projectPath?: string | null): McpServerConfig[] {
     const normalized = normalizeProjectPath(projectPath);
-    return this.store.get().filter((server) =>
+    return this.store
+      .get()
+      .map((server) => this.reveal(server))
+      .filter((server) =>
       server.enabled &&
       ((server.level ?? "global") === "global" ||
         (!!normalized && normalizeProjectPath(server.projectPath) === normalized)),

@@ -44,6 +44,11 @@ export class PermissionService {
     this.grants = new JsonFileStore<PermissionGrant[]>(join(dataDir, "grants.json"), []);
   }
 
+  /** Wait for queued writes (used on shutdown and in tests). */
+  async flush(): Promise<void> {
+    await this.grants.flush();
+  }
+
   hasGrant(sessionId: string, tool: string): boolean {
     return this.grants.get().some(
       (g) => g.tool === tool && (g.scope === "always" || (g.scope === "session" && g.sessionId === sessionId)),

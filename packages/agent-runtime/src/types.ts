@@ -75,6 +75,9 @@ export interface HostBridge {
 export interface AgentOptions {
   /** Safety valve: max model→tool round-trips per turn. Default 24. */
   maxSteps?: number;
+  /** Character budget for the model window per request. Older turns are
+   *  dropped behind a checkpoint note once the budget is exceeded. */
+  contextCharBudget?: number;
   /** Injectable provider factory (tests use this with a scripted provider). */
   providerFactory?: (spec: ModelSpec) => Provider;
 }

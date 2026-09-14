@@ -162,6 +162,9 @@ export function useSenastr() {
   modesRef.current = { sessionPrefs, defaultPermissionMode };
   const activeSessionRef = useRef<Session | null>(null);
   activeSessionRef.current = activeSession;
+  // Event listeners subscribe once; this ref keeps the latest newSession
+  // callable (used by the tray "New task" action).
+  const newSessionRef = useRef<((projectPath?: string | null) => Promise<void>) | null>(null);
 
   // ---- live events ----------------------------------------------------------
   useEffect(() => {
@@ -169,6 +172,10 @@ export function useSenastr() {
       // Main-process notifications carry `kind`; everything else is an AgentEvent.
       if ("kind" in ev) {
         switch (ev.kind) {
+          case "tray/new-task": {
+            void newSessionRef.current?.();
+            return;
+          }
           case "permission/requested": {
             const request = ev.request;
             // Auto-approve when the session's permission mode allows it.
@@ -466,6 +473,7 @@ export function useSenastr() {
     },
     [busy, pushNotice],
   );
+  newSessionRef.current = newSession;
 
   const renameSession = useCallback(
     async (id: string, title: string) => {

@@ -22,6 +22,11 @@ export interface SkillQuery {
 export class SkillService {
   private readonly store: JsonFileStore<SkillRecord[]>;
 
+  /** Wait for queued writes (used on shutdown and in tests). */
+  async flush(): Promise<void> {
+    await this.store.flush();
+  }
+
   constructor(dataDir: string) {
     this.store = new JsonFileStore<SkillRecord[]>(join(dataDir, "skills.json"), []);
   }

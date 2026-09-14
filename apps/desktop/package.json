@@ -32,11 +32,89 @@
     "appId": "dev.senastr.desktop",
     "productName": "senastr",
     "directories": {
-      "output": "release"
+      "output": "release",
+      "buildResources": "resources"
     },
+    "asar": true,
     "files": [
       "out/**",
-      "resources/**"
-    ]
+      "!resources/**"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/host-core",
+        "to": "senastr-host-core"
+      }
+    ],
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.developer-tools",
+      "icon": "resources/icon.png",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "resources/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "rpm",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "category": "Development",
+      "icon": "resources/icon.png",
+      "maintainer": "senastr",
+      "synopsis": "Local-first AI coding agent workspace"
+    }
   }
 }

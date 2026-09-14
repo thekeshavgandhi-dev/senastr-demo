@@ -5,7 +5,17 @@ import type { SessionStore } from "../sessions";
 import type { PluginService } from "../plugins";
 import type { McpService } from "../mcp";
 import type { ReviewStore } from "../review";
-import { deleteFileTool, listDirTool, readFileTool, resolveProjectPath, safeJoin, writeFileTool } from "./fs";
+import {
+  deleteFileTool,
+  editFileTool,
+  globTool,
+  grepTool,
+  listDirTool,
+  readFileTool,
+  resolveProjectPath,
+  safeJoin,
+  writeFileTool,
+} from "./fs";
 import { runShell } from "./shell";
 
 export interface ToolRunParams {
@@ -84,18 +94,18 @@ export class ToolRunner {
 
       // Snapshot the previous content before a write so Review can show
       // a diff and roll back afterwards.
+      const mutating = params.tool === "write_file" || params.tool === "edit_file";
       const snapshotBefore =
-        params.tool === "write_file" && typeof params.args.path === "string"
+        mutating && typeof params.args.path === "string"
           ? readExistingFile(project, params.args.path)
           : undefined;
       const output = await this.execute(tool, project, params.args);
-      if (params.tool === "write_file" && typeof params.args.path === "string") {
-        this.review?.append(
-          session.id,
-          params.args.path,
-          snapshotBefore ?? null,
-          typeof params.args.content === "string" ? params.args.content : "",
-        );
+      if (mutating && typeof params.args.path === "string") {
+        const after =
+          params.tool === "write_file" && typeof params.args.content === "string"
+            ? params.args.content
+            : readExistingFile(project, params.args.path) ?? "";
+        this.review?.append(session.id, params.args.path, snapshotBefore ?? null, after);
       }
       return finish(true, { output });
     } catch (err) {
@@ -114,6 +124,12 @@ export class ToolRunner {
         return readFileTool(project, args);
       case "write_file":
         return writeFileTool(project, args);
+      case "edit_file":
+        return editFileTool(project, args);
+      case "glob":
+        return globTool(project, args);
+      case "grep":
+        return grepTool(project, args);
       case "list_dir":
         return listDirTool(project, args);
       case "run_command":
@@ -149,6 +165,10 @@ export class ToolRunner {
 
   private summarize(tool: ToolDefinition, args: Record<string, unknown>): string {
     if (tool.source === "mcp") return `${tool.description} → ${JSON.stringify(args).slice(0, 100)}`;
+    if (tool.name === "edit_file" && typeof args.path === "string") {
+      const count = Array.isArray(args.edits) ? args.edits.length : 0;
+      return `edit_file → ${args.path} (${count} change${count === 1 ? "" : "s"})`;
+    }
     const path = typeof args.path === "string" ? args.path : undefined;
     const command = typeof args.command === "string" ? args.command : undefined;
     const content = typeof args.content === "string" ? args.content : undefined;

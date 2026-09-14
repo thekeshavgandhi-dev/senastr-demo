@@ -24,6 +24,12 @@ export {
   type ResilientBuildRequest,
   type ResilientRequest,
 } from "./providers/resilient";
+export {
+  compactHistory,
+  DEFAULT_CONTEXT_CHAR_BUDGET,
+  MAX_MESSAGE_CHARS,
+  type CompactResult,
+} from "./context";
 export { defaultSystemPrompt, toAnthropicMessages, toOpenAIMessages } from "./messages";
 export type {
   AgentOptions,

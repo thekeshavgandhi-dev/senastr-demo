@@ -13,6 +13,11 @@ const GLOBAL_KEY = "";
 export class InstructionService {
   private readonly store: JsonFileStore<Record<string, ProjectContext>>;
 
+  /** Wait for queued writes (used on shutdown and in tests). */
+  async flush(): Promise<void> {
+    await this.store.flush();
+  }
+
   constructor(dataDir: string) {
     this.store = new JsonFileStore<Record<string, ProjectContext>>(join(dataDir, "instructions.json"), {});
   }

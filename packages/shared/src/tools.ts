@@ -13,7 +13,9 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
   {
     name: "read_file",
     description:
-      "Read a UTF-8 text file from the current project. Paths are relative to the project root.",
+      "Read a UTF-8 text file from the current project. Paths are relative to the project root. " +
+      "The header carries a #TAG for the exact content you just read: pass it to edit_file so an " +
+      "edit can be verified against the version you saw.",
     parameters: {
       type: "object",
       properties: {
@@ -24,6 +26,56 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
         },
       },
       required: ["path"],
+    },
+    risk: "read",
+    source: "builtin",
+  },
+  {
+    name: "glob",
+    description:
+      "Find files in the current project by glob pattern (for example `src/**/*.ts`, `**/*.md`, " +
+      "`packages/*/package.json`). Returns project-relative paths, newest directories skipped " +
+      "(node_modules, .git, dist, build, out, target, coverage). Use this instead of listing " +
+      "directories one by one.",
+    parameters: {
+      type: "object",
+      properties: {
+        pattern: { type: "string", description: "Glob pattern with `*`, `**` and `?` wildcards." },
+        path: {
+          type: "string",
+          description: "Optional directory to search under (relative to the project root).",
+        },
+        max_results: {
+          type: "number",
+          description: "Optional cap on returned paths (default 500, max 2000).",
+        },
+      },
+      required: ["pattern"],
+    },
+    risk: "read",
+    source: "builtin",
+  },
+  {
+    name: "grep",
+    description:
+      "Search file contents in the current project with a regular expression and return " +
+      "`path:line: text` matches. Use it to locate symbols, usages or configuration without " +
+      "reading whole files. Combine with `include` (a glob such as `**/*.ts`) to narrow the search.",
+    parameters: {
+      type: "object",
+      properties: {
+        pattern: { type: "string", description: "JavaScript regular expression to search for." },
+        path: {
+          type: "string",
+          description: "Optional file or directory to search (relative to the project root).",
+        },
+        include: { type: "string", description: "Optional glob filter for candidate files." },
+        max_results: {
+          type: "number",
+          description: "Optional cap on returned matches (default 200, max 1000).",
+        },
+      },
+      required: ["pattern"],
     },
     risk: "read",
     source: "builtin",
@@ -57,6 +109,44 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
       },
     },
     risk: "read",
+    source: "builtin",
+  },
+  {
+    name: "edit_file",
+    description:
+      "Edit an existing file by replacing whole line ranges, verified against a #TAG. The tag comes " +
+      "from read_file (or the previous edit_file/write_file result) and must match the file's current " +
+      "content — if the file changed since you read it, the edit is rejected so nothing is clobbered. " +
+      "Line numbers are 1-based and inclusive; use `end_line` = `start_line` - 1 to insert before a " +
+      "line. Prefer this over write_file for changes to existing files.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "File path relative to the project root." },
+        tag: {
+          type: "string",
+          description: "The 8-character content tag from read_file (the `#TAG` in the header).",
+        },
+        edits: {
+          type: "array",
+          description: "Line-range replacements, applied from the bottom of the file upwards.",
+          items: {
+            type: "object",
+            properties: {
+              start_line: { type: "number", description: "First line to replace (1-based)." },
+              end_line: {
+                type: "number",
+                description: "Last line to replace (inclusive). start_line - 1 inserts before start_line.",
+              },
+              new_text: { type: "string", description: "Replacement text (may be empty to delete)." },
+            },
+            required: ["start_line", "end_line", "new_text"],
+          },
+        },
+      },
+      required: ["path", "tag", "edits"],
+    },
+    risk: "write",
     source: "builtin",
   },
   {

@@ -10,6 +10,7 @@ import {
   type ProviderSummary,
   type ProviderTestResult,
 } from "@senastr/shared";
+import { SecretBox, isEncryptedValue } from "./secrets";
 import { JsonFileStore } from "./store";
 
 const TEST_TIMEOUT_MS = 10_000;
@@ -36,23 +37,75 @@ const RESERVED_HEADERS = new Set([
  */
 export class ProviderStore {
   private store: JsonFileStore<ProviderConfig[]>;
+  private readonly secrets: SecretBox;
 
-  constructor(dataDir: string) {
+  constructor(dataDir: string, secrets?: SecretBox) {
+    this.secrets = secrets ?? new SecretBox(dataDir);
     this.store = new JsonFileStore<ProviderConfig[]>(join(dataDir, "providers.json"), []);
+    this.migratePlaintextSecrets();
+  }
+
+  /** Re-encrypt credentials written by older builds (or pasted keys). */
+  private migratePlaintextSecrets(): void {
+    const stored = this.store.get();
+    let changed = false;
+    const migrated = stored.map((provider) => {
+      const needsKeys = [provider.apiKey, ...(provider.apiKeys ?? [])].some(
+        (key) => typeof key === "string" && key.length > 0 && !isEncryptedValue(key),
+      );
+      const needsHeaders = this.secrets.mapNeedsEncryption(provider.headers);
+      if (!needsKeys && !needsHeaders) return provider;
+      changed = true;
+      return this.protect(provider, { keys: needsKeys, headers: needsHeaders });
+    });
+    if (changed) this.store.update(() => migrated);
+  }
+
+  /** Encrypt the credential fields of a provider record before persisting. */
+  private protect(cfg: ProviderConfig, only?: { keys?: boolean; headers?: boolean }): ProviderConfig {
+    const encryptKeys = only?.keys ?? true;
+    const encryptHeaders = only?.headers ?? true;
+    const keys = encryptKeys
+      ? {
+          apiKey: typeof cfg.apiKey === "string" && cfg.apiKey ? this.secrets.encrypt(cfg.apiKey) : cfg.apiKey,
+          apiKeys: cfg.apiKeys?.map((key) => (key ? this.secrets.encrypt(key) : key)),
+        }
+      : { apiKey: cfg.apiKey, apiKeys: cfg.apiKeys };
+    return {
+      ...cfg,
+      ...keys,
+      headers: encryptHeaders ? this.secrets.encryptMap(cfg.headers) : cfg.headers,
+    };
+  }
+
+  /** Decrypt the credential fields of a stored record for internal use. */
+  private reveal(cfg: ProviderConfig): ProviderConfig {
+    return {
+      ...cfg,
+      apiKey: typeof cfg.apiKey === "string" ? this.secrets.decrypt(cfg.apiKey) : cfg.apiKey,
+      apiKeys: cfg.apiKeys?.map((key) => (isEncryptedValue(key) ? this.secrets.decrypt(key) : key)),
+      headers: this.secrets.decryptMap(cfg.headers),
+    };
+  }
+
+  /** Wait for queued writes (used on shutdown and in tests). */
+  async flush(): Promise<void> {
+    await this.store.flush();
   }
 
   list(): ProviderSummary[] {
-    return this.store.get().map(maskProvider);
+    return this.store.get().map((provider) => maskProvider(this.reveal(provider)));
   }
 
   get(id: string): ProviderConfig {
     const found = this.store.get().find((p) => p.id === id);
     if (!found) throw new RpcError(ErrorCodes.PROVIDER_NOT_FOUND, `provider not found: ${id}`);
-    return normalizeStoredProvider(found);
+    return normalizeStoredProvider(this.reveal(found));
   }
 
   set(config: ProviderConfig): ProviderSummary {
-    const existing = this.store.get().find((provider) => provider.id === config?.id);
+    const stored = this.store.get().find((provider) => provider.id === config?.id);
+    const existing = stored ? this.reveal(stored) : undefined;
     // Omitted or masked values in an edit mean "keep the stored secret". Do
     // the merge in host-core so credentials never need to return to a client.
     const merged = existing
@@ -63,14 +116,15 @@ export class ProviderStore {
         }
       : { ...config, apiKeys: mergeKeyPool(config.apiKeys, config.apiKey, undefined) };
     const cfg = validateProvider(merged);
+    const persisted = this.protect(cfg);
     this.store.update((all) => {
       const idx = all.findIndex((p) => p.id === cfg.id);
       if (idx >= 0) {
         const next = [...all];
-        next[idx] = cfg;
+        next[idx] = persisted;
         return next;
       }
-      return [...all, cfg];
+      return [...all, persisted];
     });
     return maskProvider(cfg);
   }
@@ -83,7 +137,8 @@ export class ProviderStore {
 
   /** Discover models from an unsaved setup-dialog connection. */
   async discover(input: ProviderDiscoveryInput): Promise<ProviderTestResult> {
-    const existing = input?.id ? this.store.get().find((provider) => provider.id === input.id) : undefined;
+    const stored = input?.id ? this.store.get().find((provider) => provider.id === input.id) : undefined;
+    const existing = stored ? this.reveal(stored) : undefined;
     const draft = existing
       ? {
           ...input,

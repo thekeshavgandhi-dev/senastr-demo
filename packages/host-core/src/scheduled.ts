@@ -23,6 +23,11 @@ export class ScheduledService {
   private readonly tasks: JsonFileStore<ScheduledTask[]>;
   private readonly runs: JsonFileStore<ScheduledRun[]>;
 
+  /** Wait for queued writes (used on shutdown and in tests). */
+  async flush(): Promise<void> {
+    await Promise.all([this.tasks.flush(), this.runs.flush()]);
+  }
+
   constructor(dataDir: string) {
     this.tasks = new JsonFileStore<ScheduledTask[]>(`${dataDir}/scheduled-tasks.json`, []);
     this.runs = new JsonFileStore<ScheduledRun[]>(`${dataDir}/scheduled-runs.json`, []);

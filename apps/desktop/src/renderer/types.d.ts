@@ -45,7 +45,8 @@ export type SenastrEvent =
   | { kind: "permission/requested"; request: PermissionRequest }
   | { kind: "notify/added"; notification: AppNotification }
   | { kind: "scheduled/started"; taskId: string; name: string }
-  | { kind: "scheduled/finished"; taskId: string; status: string; sessionId?: string; error?: string };
+  | { kind: "scheduled/finished"; taskId: string; status: string; sessionId?: string; error?: string }
+  | { kind: "tray/new-task" };
 
 export interface SenastrApi {
   app: {
