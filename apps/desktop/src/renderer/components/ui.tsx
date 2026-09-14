@@ -54,9 +54,25 @@ interface MenuProps {
   label?: string;
 }
 
+interface MenuPosition {
+  top?: number;
+  bottom?: number;
+  left: number;
+  minWidth: number;
+  maxHeight: number;
+}
+
+const MENU_MARGIN = 8;
+const MENU_GAP = 6;
+const MENU_MAX_HEIGHT = 340;
+
 /**
  * Lightweight anchored menu. The trigger renders inline; the floating panel
- * is portalled to the body and positioned under the trigger.
+ * is portalled to the body and positioned next to the trigger.
+ *
+ * Positioning is viewport-aware: when there isn't room below the trigger the
+ * panel flips above it, and it is always clamped horizontally and vertically
+ * so it can never be clipped off-screen ("hidden"/"cut off" popups).
  */
 export function Menu({
   open,
@@ -70,19 +86,61 @@ export function Menu({
 }: MenuProps) {
   const triggerRef = useRef<HTMLElement | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
-  const [pos, setPos] = useState<{ top: number; left: number; minWidth: number } | null>(null);
+  const [pos, setPos] = useState<MenuPosition | null>(null);
 
   useLayoutEffect(() => {
     if (!open) {
       setPos(null);
       return;
     }
-    const el = triggerRef.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    const minWidth = Math.max(r.width, 200);
-    const left = align === "end" ? Math.max(8, r.right - minWidth) : Math.min(r.left, window.innerWidth - minWidth - 8);
-    setPos({ top: r.bottom + 6, left, minWidth });
+    const place = () => {
+      const el = triggerRef.current;
+      const panel = panelRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const minWidth = Math.max(r.width, 200);
+
+      // Horizontal: align to the trigger edge, then clamp inside the viewport.
+      let left = align === "end" ? r.right - minWidth : r.left;
+      left = Math.max(MENU_MARGIN, Math.min(left, vw - minWidth - MENU_MARGIN));
+
+      // Vertical: prefer opening below; flip above when it would be clipped.
+      const spaceBelow = vh - r.bottom - MENU_GAP;
+      const spaceAbove = r.top - MENU_GAP;
+      const panelHeight = panel?.offsetHeight || 0;
+      // Prefer the side that can hold the whole panel; when the height isn't
+      // measurable yet (e.g. jsdom), fall back to the side with more room.
+      const fitsBelow = panelHeight > 0 && spaceBelow >= panelHeight;
+      const openDown = fitsBelow || spaceBelow >= spaceAbove;
+
+      let top: number | undefined;
+      let bottom: number | undefined;
+      let maxHeight: number;
+      if (openDown) {
+        maxHeight = Math.min(MENU_MAX_HEIGHT, Math.max(40, spaceBelow - MENU_MARGIN));
+        top = Math.max(MENU_MARGIN, Math.min(r.bottom + MENU_GAP, vh - MENU_MARGIN - maxHeight));
+      } else {
+        maxHeight = Math.min(MENU_MAX_HEIGHT, Math.max(40, spaceAbove - MENU_MARGIN));
+        bottom = Math.max(MENU_MARGIN, vh - r.top + MENU_GAP);
+      }
+      setPos({ top, bottom, left, minWidth, maxHeight });
+    };
+    // Re-anchor when the window resizes or any scroll container moves the
+    // trigger. Ignore scrolls coming from inside the panel itself (its own
+    // overflow) so scrolling menu content never re-triggers placement.
+    const onScroll = (e: Event) => {
+      if (panelRef.current?.contains(e.target as Node)) return;
+      place();
+    };
+    place();
+    window.addEventListener("resize", place);
+    document.addEventListener("scroll", onScroll, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      document.removeEventListener("scroll", onScroll, true);
+    };
   }, [open, align]);
 
   useEffect(() => {
@@ -97,7 +155,21 @@ export function Menu({
       if (e.key === "Escape") {
         e.stopPropagation();
         onClose();
+        return;
       }
+      // Arrow/Home/End move focus between the menu items (Enter/Space already
+      // activate a focused <button> natively).
+      const panel = panelRef.current;
+      if (!panel || !["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
+      const items = Array.from(panel.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)'));
+      if (!items.length) return;
+      const idx = items.indexOf(document.activeElement as HTMLElement);
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === "Home") items[0].focus();
+      else if (e.key === "End") items[items.length - 1].focus();
+      else if (e.key === "ArrowDown") items[(idx + 1) % items.length].focus();
+      else items[(idx - 1 + items.length) % items.length].focus();
     };
     document.addEventListener("mousedown", onDown);
     document.addEventListener("keydown", onKey, true);
@@ -110,14 +182,24 @@ export function Menu({
   return (
     <span className={cx("menu-anchor", className)}>
       {trigger(triggerRef)}
-      {open && pos
+      {open
         ? createPortal(
             <div
               ref={panelRef}
               className={cx("menu-panel", menuClassName)}
               role="menu"
               aria-label={label}
-              style={{ top: pos.top, left: pos.left, minWidth: pos.minWidth }}
+              style={
+                pos
+                  ? {
+                      top: pos.top,
+                      bottom: pos.bottom,
+                      left: pos.left,
+                      minWidth: pos.minWidth,
+                      maxHeight: pos.maxHeight,
+                    }
+                  : { visibility: "hidden", top: 0, left: 0, minWidth: 200 }
+              }
             >
               {children}
             </div>,
@@ -188,9 +270,39 @@ export function Modal({
     return () => document.removeEventListener("keydown", onKey, true);
   }, [onClose]);
 
+  // Move focus into the dialog, trap Tab inside it while open, and restore
+  // focus to the previously focused element when it closes.
   useEffect(() => {
-    const el = panelRef.current?.querySelector<HTMLElement>("[data-autofocus]");
-    el?.focus();
+    const panel = panelRef.current;
+    if (!panel) return;
+    const previous = document.activeElement as HTMLElement | null;
+    const autofocus = panel.querySelector<HTMLElement>("[data-autofocus]");
+    (autofocus ?? panel).focus();
+
+    const FOCUSABLE =
+      'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Tab") return;
+      const focusables = panel.querySelectorAll<HTMLElement>(FOCUSABLE);
+      if (!focusables.length) return;
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      const active = document.activeElement;
+      if (e.shiftKey) {
+        if (active === first || !panel.contains(active)) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else if (active === last || !panel.contains(active)) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown, true);
+      previous?.focus?.();
+    };
   }, []);
 
   return createPortal(
@@ -200,6 +312,7 @@ export function Modal({
         role="dialog"
         aria-modal="true"
         aria-label={label}
+        tabIndex={-1}
         className={cx("modal-panel", wide && "wide", className)}
       >
         {children}

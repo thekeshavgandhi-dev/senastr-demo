@@ -16,10 +16,17 @@
     "postinstall": "node scripts/postinstall.mjs",
     "typecheck": "pnpm build:packages && pnpm -r --filter \"./packages/*\" typecheck && pnpm --filter @senastr/desktop typecheck",
     "test": "pnpm build:packages && vitest run",
+    "test:ui": "vitest run --project desktop-ui",
+    "test:watch": "vitest",
     "clean": "pnpm -r --if-present clean"
   },
   "devDependencies": {
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.7",
     "@types/node": "^22.10.0",
+    "jsdom": "^26.1.0",
     "typescript": "~5.9.3",
     "vitest": "^5.0.0"
   }

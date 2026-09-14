@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { PlanProposal } from "@senastr/shared";
 import { IconCheck, IconSparkles, IconX } from "./icons";
 import { Modal, cx } from "./ui";
@@ -25,6 +25,12 @@ export function PlanDialog({
 }) {
   const [feedback, setFeedback] = useState("");
   const [mode, setMode] = useState<"review" | "revise">("review");
+  const feedbackRef = useRef<HTMLTextAreaElement>(null);
+
+  // The feedback field appears after the modal mounts, so focus it explicitly.
+  useEffect(() => {
+    if (mode === "revise") feedbackRef.current?.focus();
+  }, [mode]);
 
   return (
     <Modal label="Plan ready for review" onClose={onDismiss} className="plan-modal" wide>
@@ -56,8 +62,8 @@ export function PlanDialog({
 
       {mode === "revise" && (
         <textarea
+          ref={feedbackRef}
           className="plan-feedback"
-          data-autofocus
           rows={3}
           value={feedback}
           placeholder="What should change? (e.g. “use SQLite instead of Postgres, and skip step 4”)"

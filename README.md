@@ -130,7 +130,8 @@ real model turn through the agent runtime.
 | `pnpm build` | build all packages + the desktop app |
 | `pnpm build:packages` | build only the TS packages |
 | `pnpm typecheck` | typecheck packages + desktop (node + web) |
-| `pnpm test` | run the vitest suites (protocol, host-core, agent loop) |
+| `pnpm test` | run all vitest suites (protocol, host-core, agent loop, renderer UI) |
+| `pnpm test:ui` | run only the renderer component tests (jsdom + Testing Library) |
 | `pnpm demo` | headless end-to-end exercise of the core |
 | `pnpm clean` | remove build outputs |
 
