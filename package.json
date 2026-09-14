@@ -20,7 +20,7 @@
     "test:watch": "vitest",
     "clean": "pnpm -r --if-present clean",
     "bundle:host": "node scripts/bundle-host.mjs",
-    "test:e2e": "node scripts/e2e-smoke.mjs",
+    "test:e2e": "node scripts/e2e-electron-boot.mjs",
     "verify:packaging": "node scripts/verify-packaging.mjs"
   },
   "devDependencies": {

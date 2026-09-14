@@ -9,7 +9,7 @@
  * sandbox — the script exits 0 with a clear SKIP so CI on a machine with
  * network can run it for real.
  *
- * Usage: node scripts/e2e-smoke.mjs [--report <file.json>]
+ * Usage: node scripts/e2e-electron-boot.mjs [--report <file.json>]
  * Env:   SENASTR_E2E_SETTLE_MS  extra settle time before probing (default 2500)
  */
 import { spawn } from "node:child_process";
@@ -29,7 +29,7 @@ const report =
     : join(tmpdir(), `senastr-e2e-${Date.now()}.json`);
 
 function fail(message) {
-  console.error(`e2e-smoke: ${message}`);
+  console.error(`e2e-electron-boot: ${message}`);
   process.exit(1);
 }
 
@@ -60,7 +60,7 @@ if (!existsSync(join(root, "apps", "desktop", "resources", "host-core", "main.js
 
 const binary = electronBinary();
 if (!binary) {
-  console.log("e2e-smoke: SKIP — Electron binary not installed (run the electron install.js step once online).");
+  console.log("e2e-electron-boot: SKIP — Electron binary not installed (run the electron install.js step once online).");
   process.exit(0);
 }
 
@@ -103,7 +103,7 @@ child.stderr.on("data", (chunk) => {
 });
 
 const timeout = setTimeout(() => {
-  console.error("e2e-smoke: FAIL — the app did not exit within 90s");
+  console.error("e2e-electron-boot: FAIL — the app did not exit within 90s");
   child.kill("SIGKILL");
   process.exit(1);
 }, 90_000);
@@ -117,14 +117,14 @@ child.on("exit", (code) => {
     /* no report — handled below */
   }
   if (parsed) {
-    console.log(`e2e-smoke: report ${report}`);
-    if (parsed.screenshot) console.log(`e2e-smoke: screenshot ${parsed.screenshot}`);
+    console.log(`e2e-electron-boot: report ${report}`);
+    if (parsed.screenshot) console.log(`e2e-electron-boot: screenshot ${parsed.screenshot}`);
   }
   if (code === 0 && parsed?.ok) {
-    console.log("e2e-smoke: PASS");
+    console.log("e2e-electron-boot: PASS");
     process.exit(0);
   }
-  console.error(`e2e-smoke: FAIL (exit ${code})`);
+  console.error(`e2e-electron-boot: FAIL (exit ${code})`);
   if (!parsed) console.error(output.split("\n").slice(-25).join("\n"));
   process.exit(1);
 });

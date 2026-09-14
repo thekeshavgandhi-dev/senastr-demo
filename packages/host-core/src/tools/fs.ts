@@ -1,5 +1,13 @@
 import { createHash } from "node:crypto";
-import { lstatSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { ErrorCodes, RpcError } from "@senastr/shared";
 
@@ -40,15 +48,55 @@ export function resolveProjectPath(project: string | null): string {
   return resolve(project);
 }
 
+function realPathOrNull(p: string): string | null {
+  try {
+    return realpathSync(p);
+  } catch {
+    return null;
+  }
+}
+
+/** Deepest existing ancestor of `p` (or `p` itself when it exists). */
+function deepestExisting(p: string): string | null {
+  let current = p;
+  for (;;) {
+    if (realPathOrNull(current) !== null) return current;
+    const parent = dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+}
+
 /**
- * Join `rel` onto the project root and refuse anything that escapes it
- * (`..`, absolute paths, symlink-free lexical check).
+ * Join `rel` onto the project root and refuse anything that escapes it.
+ *
+ * Two layers, because each catches what the other cannot:
+ *   1. Lexical — `..` segments and absolute paths are rejected before touching
+ *      the filesystem, so a typo cannot even be attempted.
+ *   2. Symlink — a link *inside* the project can point anywhere, and a lexical
+ *      check happily follows it. The real path of the target (or of its
+ *      deepest existing ancestor, for files that do not exist yet) must still
+ *      land inside the real project root.
  */
 export function safeJoin(project: string, rel: string): string {
   const root = resolve(project);
   const target = resolve(root, rel || ".");
   if (target !== root && !target.startsWith(root + sep)) {
     throw new RpcError(ErrorCodes.PATH_ESCAPES_PROJECT, `path escapes the project root: ${rel}`);
+  }
+
+  // Only meaningful when the root itself exists: if it does not, there is no
+  // link under it to follow, and the lexical check above is the whole answer.
+  const realRoot = realPathOrNull(root);
+  if (realRoot) {
+    const anchor = deepestExisting(target);
+    const realAnchor = anchor ? realPathOrNull(anchor) : null;
+    if (realAnchor && realAnchor !== realRoot && !realAnchor.startsWith(realRoot + sep)) {
+      throw new RpcError(
+        ErrorCodes.PATH_ESCAPES_PROJECT,
+        `path escapes the project root through a link: ${rel}`,
+      );
+    }
   }
   return target;
 }

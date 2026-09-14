@@ -25,6 +25,7 @@ import {
   readFileSync,
   readdirSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -293,6 +294,20 @@ async function main() {
       args: { path: "/etc/passwd" },
     });
     return r.ok === false ? r.error : "absolute path was allowed";
+  });
+
+  await check("T5d", "read_file refuses a symlink that points outside the project", async () => {
+    const outside = mkdtempSync(join(tmpdir(), "senastr-parity-outside-"));
+    writeFileSync(join(outside, "secret.txt"), "top secret");
+    symlinkSync(join(outside, "secret.txt"), join(project, "parity-link.txt"));
+    const r = await request("tool/run", {
+      sessionId: session.id,
+      tool: "read_file",
+      args: { path: "parity-link.txt" },
+    });
+    return r.ok === false && /link|escape/i.test(r.error ?? "")
+      ? r.error
+      : `symlink escape was allowed: ${JSON.stringify(r).slice(0, 160)}`;
   });
 
   await check("T5c", "write_file rejects `..` traversal out of the project root", async () => {

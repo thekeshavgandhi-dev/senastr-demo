@@ -170,17 +170,35 @@ model providers and Streamable HTTP MCP endpoints you configure (including
 connection/model-discovery probes), plus anything you explicitly approve a
 local command or extension to run.
 
+## Parity with PI-Desktop
+
+senastr is a from-scratch implementation of the architecture of
+[PI-Desktop](https://github.com/vastsa/pi-desktop). `docs/pi-desktop-parity.md`
+records a feature-by-feature audit against it, with the evidence for each
+claim; `scripts/verify-parity.mjs` reproduces the checks against a live
+host-core (currently 68 passing, 0 failing, 6 known gaps).
+
+Shipped: the agent loop and its supervision, the ten builtin tools including
+tag-verified line-anchored edits, glob and grep, the permission layer, project
+confinement (lexical *and* through symlinks), AES-256-GCM credential encryption
+behind a keychain-wrapped key, context compaction with checkpoints, durable
+sidecar state, plan mode with server-side denial, subagents, skills, plugins,
+MCP, scheduled tasks, review/rollback, the work panel, a sandboxed renderer, a
+tray, electron-builder packaging with a bundled sidecar, and CI.
+
 ## Roadmap
 
-- **Packaging**: electron-builder release pipeline + bundled host-core for
-  the packaged app layout
+- **Image attachments** and a **reasoning level** — protocol-level changes to
+  the message model and provider params
+- **Command palette, `/` commands and `@` file references** in the composer
+- **Session import** from Claude Code / Codex / OpenCode / PI-Desktop
+- **i18n** (message catalogues + a language switcher)
+- **In-app updates** (electron-updater on the NSIS and AppImage lanes)
 - **Host core in Rust**: the protocol is already process-isolated; swapping
   the TS implementation for a Rust binary (à la PI-Desktop ADR 0010) is an
   upgrade path that doesn't touch the wire contract
 - **SQLite storage** behind the same store interface
-- **Plan mode** (research → frozen plan → approval → execution) and
-  session forking
+- Session forking
 - **Dynamic plugins** (code-loaded, sandboxed) behind the same manifest
-- Subagents, work panel (diffs/reviews), i18n
 - MCP OAuth and richer transport diagnostics; the stdio and Streamable HTTP
   runtime, connection tests, secret masking, and tool routing are available now

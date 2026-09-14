@@ -1,9 +1,17 @@
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { RpcError } from "@senastr/shared";
-import { contentTag, editFileTool, globToRegExp, globTool, grepTool, readFileTool } from "../src/tools/fs";
+import {
+  contentTag,
+  editFileTool,
+  globToRegExp,
+  globTool,
+  grepTool,
+  readFileTool,
+  writeFileTool,
+} from "../src/tools/fs";
 
 /** Fresh project fixture: src/app.ts, src/util.ts, docs/readme.md, noise. */
 function makeProject(): string {
@@ -222,5 +230,36 @@ describe("read_file tags", () => {
     expect(first).toBe(second);
     writeFileSync(join(project, "src", "app.ts"), "different\n");
     expect(tagOf(readFileTool(project, { path: "src/app.ts" }))).not.toBe(first);
+  });
+});
+
+describe("project confinement through links", () => {
+  it("refuses to read a file behind a symlink that leaves the project", () => {
+    const outside = mkdtempSync(join(tmpdir(), "senastr-outside-"));
+    writeFileSync(join(outside, "secrets.txt"), "top secret");
+    const project = mkdtempSync(join(tmpdir(), "senastr-proj-"));
+    symlinkSync(join(outside, "secrets.txt"), join(project, "link.txt"));
+
+    expect(() => readFileTool(project, { path: "link.txt" })).toThrow(/escapes the project root/);
+  });
+
+  it("refuses to write through a symlinked directory leaving the project", () => {
+    const outside = mkdtempSync(join(tmpdir(), "senastr-outside-"));
+    const project = mkdtempSync(join(tmpdir(), "senastr-proj-"));
+    symlinkSync(outside, join(project, "drop"));
+
+    expect(() => writeFileTool(project, { path: "drop/owned.txt", content: "x" })).toThrow(
+      /escapes the project root/,
+    );
+    expect(existsSync(join(outside, "owned.txt"))).toBe(false);
+  });
+
+  it("still allows symlinks that stay inside the project", () => {
+    const project = mkdtempSync(join(tmpdir(), "senastr-proj-"));
+    mkdirSync(join(project, "real"));
+    writeFileSync(join(project, "real", "a.txt"), "inside");
+    symlinkSync(join(project, "real"), join(project, "alias"));
+
+    expect(readFileTool(project, { path: "alias/a.txt" })).toContain("inside");
   });
 });

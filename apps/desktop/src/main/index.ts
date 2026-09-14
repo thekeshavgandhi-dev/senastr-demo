@@ -723,7 +723,7 @@ function toggleWindow(): void {
 }
 
 /**
- * End-to-end smoke hook (scripts/e2e-smoke.mjs). Runs only when SENASTR_E2E is
+ * End-to-end smoke hook (scripts/e2e-electron-boot.mjs). Runs only when SENASTR_E2E is
  * set: it waits for the real window to finish loading against the real
  * host-core sidecar, asserts the renderer actually mounted the app shell,
  * captures a screenshot and writes a JSON report for the CI script to read.
