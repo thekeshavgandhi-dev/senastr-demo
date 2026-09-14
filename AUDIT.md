@@ -97,3 +97,22 @@ The vitest/jsdom suite + headless demo cover the app logic and the host protocol
 - `agent.ts` loop reviewed in full: abort propagation, plan-mode read-only enforcement (server
   side, not just prompt-side), delegation step/report limits, ask-resolution cleanup on stop.
 - Host scheduler/permission/review/plugin limits (§2) are all enforced in the backend, not the UI.
+
+---
+
+## Addendum — button-by-button dead-control sweep (round 2)
+
+After the initial audit, a mechanical sweep of **every** `<button>`/`TooltipButton` in the
+renderer (script-checked for a missing `onClick`, no-op handlers, always-disabled states, and
+silent catch blocks on click paths) found and fixed:
+
+| Where | Problem | Fix |
+|---|---|---|
+| Settings → Scheduled | "All" segment button had **no onClick** (fake tab) | now a real **All / Global / Project** filter (tasks carry `projectPath`) |
+| Settings → Extensions | "Installed" segment button had **no onClick** (single-scope fake tab) | rendered as a static label — plugins are app-level, there is nothing to filter |
+| Whole app in a non-Electron context | `lib/api.ts` bound `window.senastr` unguarded: without the preload bridge (plain browser load, broken preload) **every** button failed silently or threw opaque `TypeError`s | `hasBridge()` gate: the app now renders a **"backend is not connected"** screen (`role=alert`, with `pnpm dev` instructions) instead of a dead UI, and any stray API call rejects with that same actionable message |
+
+Verified after the sweep: **13 files / 151 tests green**, `pnpm typecheck` clean, `pnpm demo` passing.
+Everything else checked out: no no-op handlers, no always-disabled controls, all settings pages
+surface failures as toasts, chat markdown links open in the system browser via the main-process
+guard, and the composer swaps to guidance buttons when no provider/project is configured.
