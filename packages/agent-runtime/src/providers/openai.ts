@@ -1,7 +1,7 @@
 import type { ProviderEvent, Provider, ProviderChatParams, ModelSpec } from "../types";
 import { toOpenAIMessages } from "../messages";
 import { postToModel } from "./resilient";
-import type { Usage } from "@senastr/shared";
+import { reasoningEffortFor, type Usage } from "@senastr/shared";
 
 /**
  * OpenAI Chat Completions streaming client.
@@ -27,6 +27,11 @@ export class OpenAICompatibleProvider implements Provider {
         function: { name: t.name, description: t.description, parameters: t.parameters },
       }));
     }
+    if (typeof params.temperature === "number") body.temperature = params.temperature;
+    // Reasoning models take `reasoning_effort`; `off` omits the field entirely
+    // so non-reasoning models and strict gateways keep working unchanged.
+    const effort = params.thinkingLevel ? reasoningEffortFor(params.thinkingLevel) : null;
+    if (effort) body.reasoning_effort = effort;
 
     const res = await postToModel({
       spec: this.spec,
@@ -65,6 +70,15 @@ export class OpenAICompatibleProvider implements Provider {
       if (typeof delta?.content === "string" && delta.content.length > 0) {
         yield { kind: "text", delta: delta.content };
       }
+      // Reasoning text rides a separate field on compatible endpoints
+      // (DeepSeek `reasoning_content`, OpenRouter `reasoning`, …).
+      const reasoningDelta =
+        typeof delta?.reasoning_content === "string"
+          ? delta.reasoning_content
+          : typeof delta?.reasoning === "string"
+            ? delta.reasoning
+            : "";
+      if (reasoningDelta) yield { kind: "reasoning", delta: reasoningDelta };
       for (const tc of delta?.tool_calls ?? []) {
         const index = typeof tc.index === "number" ? tc.index : 0;
         const slot = pending.get(index) ?? { id: "", name: "", args: "" };

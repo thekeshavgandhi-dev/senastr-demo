@@ -1,22 +1,33 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AppNotification,
+  AppSettings,
   AskAnswers,
   AskRequest,
   ChatMessage,
+  CommandItem,
   DelegationSummary,
+  ExternalSessionSummary,
   GrantScope,
+  ImportScanResult,
+  MessageAttachment,
   PermissionGrant,
   PermissionRequest,
   PlanProposal,
   PluginInfo,
+  ProjectGroup,
+  ProjectRecord,
   ProviderSummary,
   Session,
   SessionMeta,
   SessionMode,
+  SessionRevision,
+  ThinkingLevel,
+  TokenUsageHistory,
   ToolCall,
   ToolResult,
   TurnStopReason,
+  UpdateState,
   Usage,
 } from "@senastr/shared";
 import { api, cleanError, readStoredModelRef, storeModelRef } from "../lib/api";
@@ -34,6 +45,8 @@ import {
 
 export interface StreamState {
   text: string;
+  /** Reasoning/thinking text streamed by a reasoning model. */
+  reasoning: string;
   blocks: Array<{ call: ToolCall; result?: ToolResult }>;
 }
 
@@ -82,6 +95,22 @@ export function useSenastr() {
   const [workPanelOpen, setWorkPanelOpenState] = useState<boolean>(() => prefs.workPanel.open);
   const [workPanelTab, setWorkPanelTabState] = useState<string>(() => prefs.workPanel.tab || "review");
   const [searchOpen, setSearchOpen] = useState(false);
+  // ---- command palette + composer catalogues --------------------------------
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [commands, setCommands] = useState<CommandItem[]>([]);
+  const [fileIndex, setFileIndex] = useState<string[]>([]);
+  const [fileIndexPath, setFileIndexPath] = useState<string | null>(null);
+  const [updatesState, setUpdatesState] = useState<UpdateState | null>(null);
+  const [hostSettings, setHostSettings] = useState<AppSettings>(() => ({}));
+  const [language, setLanguageState] = useState<string>(() => prefs.language);
+  const [projects, setProjects] = useState<ProjectRecord[]>([]);
+  const [projectGroups, setProjectGroups] = useState<ProjectGroup[]>([]);
+  const [usageHistory, setUsageHistory] = useState<TokenUsageHistory | null>(null);
+  const [importState, setImportState] = useState<{
+    scanning: boolean;
+    result: ImportScanResult | null;
+    lastError: string | null;
+  }>({ scanning: false, result: null, lastError: null });
 
   // ---- session prefs -------------------------------------------------------
   const [sessionPrefs, setSessionPrefsState] = useState<Record<string, SessionPrefs>>(() => prefs.sessionPrefs);
@@ -127,15 +156,20 @@ export function useSenastr() {
     initializedRef.current = true;
     void (async () => {
       try {
-        const [list, provs, plugs, grantsList, appVersion, appDataDir, notes] = await Promise.all([
-          api.session.list(),
-          api.provider.list(),
-          api.plugin.list(),
-          api.permission.list(),
-          api.app.version(),
-          api.app.dataDir(),
-          api.notify.list().catch(() => [] as AppNotification[]),
-        ]);
+        const [list, provs, plugs, grantsList, appVersion, appDataDir, notes, cmdCatalog, projectState, settings, updateState] =
+          await Promise.all([
+            api.session.list(),
+            api.provider.list(),
+            api.plugin.list(),
+            api.permission.list(),
+            api.app.version(),
+            api.app.dataDir(),
+            api.notify.list().catch(() => [] as AppNotification[]),
+            api.command.list().catch(() => ({ commands: [], total: 0 })),
+            api.project.list().catch(() => ({ projects: [], groups: [] })),
+            api.settings.get().catch(() => ({}) as AppSettings),
+            api.updates.getState().catch(() => null),
+          ]);
         setSessions(list);
         setProviders(provs);
         setPlugins(plugs);
@@ -143,6 +177,25 @@ export function useSenastr() {
         setVersion(appVersion);
         setDataDir(appDataDir);
         setNotifications(notes);
+        setCommands(cmdCatalog.commands);
+        setProjects(projectState.projects);
+        setProjectGroups(projectState.groups);
+        setHostSettings(settings);
+        if (settings.language) {
+          prefs.language = settings.language;
+          setLanguageState(settings.language);
+        }
+        if (updateState) setUpdatesState(updateState);
+        // Auto-check for updates when the host policy allows it and the user
+        // has not opted out (parity: updates/check on boot).
+        if (settings.updates?.autoCheck !== false && navigator.onLine !== false) {
+          setTimeout(() => {
+            void api.updates
+              .check()
+              .then(setUpdatesState)
+              .catch(() => undefined);
+          }, 4000);
+        }
         const unarchived = list.filter((s) => !prefs.sessionPrefs[s.id]?.archived);
         const first = unarchived[0] ?? list[0];
         if (first) {
@@ -198,6 +251,21 @@ export function useSenastr() {
           }
           case "notify/added":
             setNotifications((prev) => [ev.notification, ...prev].slice(0, 100));
+            // Mirror into a native notification; the main process suppresses
+            // it while this session is already on screen.
+            void api.notify
+              .showNative({
+                title: ev.notification.title,
+                body: ev.notification.body,
+                sessionId: ev.notification.sessionId,
+                taskId: ev.notification.taskId,
+                kind: ev.notification.kind,
+                silent: false,
+              })
+              .catch(() => undefined);
+            return;
+          case "updates/state":
+            setUpdatesState(ev.state);
             return;
           case "scheduled/started":
             pushNotice(`Scheduled task started: ${ev.name}`, "info");
@@ -225,14 +293,25 @@ export function useSenastr() {
           setStreamSessionId(ev.sessionId);
           setBusy(true);
           setLastError(null);
-          setStream({ text: "", blocks: [] });
+          setStream({ text: "", reasoning: "", blocks: [] });
           break;
         case "assistant/delta":
-          setStream((s) => (s ? { ...s, text: s.text + ev.delta } : { text: ev.delta, blocks: [] }));
+          setStream((s) =>
+            s ? { ...s, text: s.text + ev.delta } : { text: ev.delta, reasoning: "", blocks: [] },
+          );
+          break;
+        case "assistant/reasoning":
+          setStream((s) =>
+            s
+              ? { ...s, reasoning: s.reasoning + ev.delta }
+              : { text: "", reasoning: ev.delta, blocks: [] },
+          );
           break;
         case "tool/call":
           setStream((s) =>
-            s ? { ...s, blocks: [...s.blocks, { call: ev.call }] } : { text: "", blocks: [{ call: ev.call }] },
+            s
+              ? { ...s, blocks: [...s.blocks, { call: ev.call }] }
+              : { text: "", reasoning: "", blocks: [{ call: ev.call }] },
           );
           break;
         case "tool/result":
@@ -422,14 +501,16 @@ export function useSenastr() {
   const selectSession = useCallback(
     (id: string) => {
       if (id === activeIdRef.current) return;
+      void api.notify.setViewingSession(id).catch(() => undefined);
       void api.session
         .get(id)
         .then((s) => {
           setActiveSession(s);
-          // The server is the source of truth for build/plan mode.
-          if (s.mode === "build" || s.mode === "plan") {
+          // The server is the source of truth for build/plan/goal mode.
+          if (s.mode === "build" || s.mode === "plan" || s.mode === "goal") {
             updateSessionPrefs(s.id, { mode: s.mode });
           }
+          if (s.thinkingLevel) updateSessionPrefs(s.id, { thinkingLevel: s.thinkingLevel });
           void api.chat
             .delegations(s.id)
             .then((rows) => setDelegations((prev) => ({ ...prev, [s.id]: rows })))
@@ -491,24 +572,18 @@ export function useSenastr() {
   );
 
   const forkSession = useCallback(
-    async (id: string) => {
+    async (id: string, messageCount?: number) => {
       try {
-        const src = await api.session.get(id);
-        const copy = await api.session.create({
-          title: `${src.title} (fork)`,
-          projectPath: src.projectPath,
-        });
-        if (src.messages.length) {
-          await api.session.appendMessages(
-            copy.id,
-            src.messages.map((m) => ({ ...m })),
-          );
-        }
+        // Server-side fork (parity: session/fork): the host copies the
+        // transcript, mode, project and reasoning level in one transaction.
+        const copy = await api.session.fork({ id, messageCount });
         setSessions(await api.session.list());
         setActiveSession(await api.session.get(copy.id));
         pushNotice("Session forked", "info");
+        return copy;
       } catch (err) {
         pushNotice(cleanError(err), "error");
+        return null;
       }
     },
     [pushNotice],
@@ -533,6 +608,309 @@ export function useSenastr() {
     }
   }, [pushNotice]);
 
+  /** Reasoning level for a session: host record wins, then local override. */
+  const thinkingLevelFor = useCallback(
+    (sessionId: string | null): ThinkingLevel | null => {
+      if (!sessionId) return null;
+      const fromSession = activeSession?.id === sessionId ? activeSession.thinkingLevel : undefined;
+      const stored = (fromSession ?? sessionPrefs[sessionId]?.thinkingLevel) as ThinkingLevel | undefined;
+      return stored ?? null;
+    },
+    [activeSession, sessionPrefs],
+  );
+
+  const setThinkingLevel = useCallback(
+    async (sessionId: string, level: ThinkingLevel | null) => {
+      updateSessionPrefs(sessionId, { thinkingLevel: level ?? undefined });
+      try {
+        const updated = await api.session.setThinking({ id: sessionId, level });
+        setActiveSession((prev) => (prev && prev.id === sessionId ? updated : prev));
+        setSessions((prev) => prev.map((meta) => (meta.id === sessionId ? { ...meta, thinkingLevel: level ?? undefined } : meta)));
+        prefs.thinkingLevel = level ?? "";
+      } catch (err) {
+        pushNotice(cleanError(err), "error");
+      }
+    },
+    [pushNotice, updateSessionPrefs],
+  );
+
+  /** Store one attachment (image/file/paste) and return the descriptor. */
+  const addAttachment = useCallback(
+    async (input: {
+      kind: "image" | "file";
+      name: string;
+      mimeType: string;
+      dataBase64?: string;
+      path?: string;
+      text?: string;
+    }): Promise<MessageAttachment | null> => {
+      const session = activeSessionRef.current;
+      if (!session) {
+        pushNotice("Create a session first", "error");
+        return null;
+      }
+      try {
+        return await api.attachment.add({ sessionId: session.id, ...input });
+      } catch (err) {
+        pushNotice(cleanError(err), "error");
+        return null;
+      }
+    },
+    [pushNotice],
+  );
+
+  const refreshCommands = useCallback(async (query?: string) => {
+    try {
+      const out = await api.command.list({ query });
+      setCommands(out.commands);
+      return out.commands;
+    } catch {
+      return [];
+    }
+  }, []);
+
+  const searchCommandsRemote = useCallback(
+    async (query: string): Promise<CommandItem[]> => {
+      try {
+        const out = await api.command.list({ query, limit: 40 });
+        return out.commands;
+      } catch {
+        return [];
+      }
+    },
+    [],
+  );
+
+  /** File list for "@ file" autocomplete (cached per project for 3s host-side). */
+  const ensureFileIndex = useCallback(
+    async (projectPath: string | null, force = false): Promise<string[]> => {
+      if (!projectPath) return [];
+      if (!force && fileIndexPath === projectPath && fileIndex.length > 0) return fileIndex;
+      try {
+        const result = await api.fs.index({ projectPath, force });
+        setFileIndex(result.paths);
+        setFileIndexPath(projectPath);
+        return result.paths;
+      } catch (err) {
+        pushNotice(cleanError(err), "error");
+        return [];
+      }
+    },
+    [fileIndex, fileIndexPath, pushNotice],
+  );
+
+  const refreshProjects = useCallback(async () => {
+    try {
+      const state = await api.project.list();
+      setProjects(state.projects);
+      setProjectGroups(state.groups);
+      return state;
+    } catch {
+      return { projects: [], groups: [] };
+    }
+  }, []);
+
+  const addProject = useCallback(
+    async (path: string, patch: { name?: string; pinned?: boolean; groupId?: string } = {}) => {
+      try {
+        await api.project.add({ path, ...patch });
+        return refreshProjects();
+      } catch (err) {
+        pushNotice(cleanError(err), "error");
+        return null;
+      }
+    },
+    [pushNotice, refreshProjects],
+  );
+
+  const updateProject = useCallback(
+    async (path: string, patch: { name?: string; pinned?: boolean; groupId?: string | null }) => {
+      try {
+        await api.project.update({ path, ...patch });
+        return refreshProjects();
+      } catch (err) {
+        pushNotice(cleanError(err), "error");
+        return null;
+      }
+    },
+    [pushNotice, refreshProjects],
+  );
+
+  const removeProject = useCallback(
+    async (path: string) => {
+      try {
+        await api.project.remove(path);
+        return refreshProjects();
+      } catch (err) {
+        pushNotice(cleanError(err), "error");
+        return null;
+      }
+    },
+    [pushNotice, refreshProjects],
+  );
+
+  const setProjectGroup = useCallback(
+    async (input: { id?: string; name: string }) => {
+      try {
+        await api.project.groupSet(input);
+        return refreshProjects();
+      } catch (err) {
+        pushNotice(cleanError(err), "error");
+        return null;
+      }
+    },
+    [pushNotice, refreshProjects],
+  );
+
+  const deleteProjectGroup = useCallback(
+    async (id: string) => {
+      try {
+        await api.project.groupDelete(id);
+        return refreshProjects();
+      } catch (err) {
+        pushNotice(cleanError(err), "error");
+        return null;
+      }
+    },
+    [pushNotice, refreshProjects],
+  );
+
+  const refreshUsage = useCallback(
+    async (query: { bucket?: "day" | "week" | "month"; sessionId?: string } = {}) => {
+      try {
+        const history = await api.stats.usage(query);
+        setUsageHistory(history);
+        return history;
+      } catch (err) {
+        pushNotice(cleanError(err), "error");
+        return null;
+      }
+    },
+    [pushNotice],
+  );
+
+  const scanImports = useCallback(
+    async (sources?: ExternalSessionSummary["source"][]) => {
+      setImportState((prev) => ({ ...prev, scanning: true, lastError: null }));
+      try {
+        const result = await api.session.importScan(sources ? { sources } : {});
+        setImportState({ scanning: false, result, lastError: null });
+        return result;
+      } catch (err) {
+        const message = cleanError(err);
+        setImportState({ scanning: false, result: null, lastError: message });
+        pushNotice(message, "error");
+        return null;
+      }
+    },
+    [pushNotice],
+  );
+
+  const runImport = useCallback(
+    async (summaries: ExternalSessionSummary[], projectPathOverride?: string | null) => {
+      try {
+        const result = await api.session.importRun({ sessions: summaries, projectPathOverride });
+        setSessions(await api.session.list());
+        pushNotice(
+          result.imported === 1 ? "1 session imported" : `${result.imported} sessions imported`,
+          "info",
+        );
+        return result;
+      } catch (err) {
+        pushNotice(cleanError(err), "error");
+        return null;
+      }
+    },
+    [pushNotice],
+  );
+
+  const saveRevision = useCallback(
+    async (sessionId: string, label?: string): Promise<SessionRevision | null> => {
+      try {
+        const revision = await api.session.revisions.save({ sessionId, label });
+        pushNotice(`Revision saved: ${revision.label}`, "info");
+        return revision;
+      } catch (err) {
+        pushNotice(cleanError(err), "error");
+        return null;
+      }
+    },
+    [pushNotice],
+  );
+
+  const activateRevision = useCallback(
+    async (sessionId: string, revisionId: string) => {
+      try {
+        const restored = await api.session.revisions.activate({ sessionId, revisionId });
+        setActiveSession(restored);
+        setSessions(await api.session.list());
+        pushNotice("Revision restored", "info");
+        return restored;
+      } catch (err) {
+        pushNotice(cleanError(err), "error");
+        return null;
+      }
+    },
+    [pushNotice],
+  );
+
+  const setLanguage = useCallback(
+    (next: string) => {
+      prefs.language = next;
+      setLanguageState(next);
+      void api.settings.set({ language: next }).catch(() => undefined);
+    },
+    [],
+  );
+
+  const setProxy = useCallback(
+    async (proxy: AppSettings["proxy"]) => {
+      try {
+        const next = await api.settings.set({ proxy });
+        setHostSettings(next);
+        pushNotice("Network proxy updated", "info");
+        return next;
+      } catch (err) {
+        pushNotice(cleanError(err), "error");
+        return null;
+      }
+    },
+    [pushNotice],
+  );
+
+  const checkForUpdates = useCallback(async () => {
+    try {
+      const state = await api.updates.check();
+      setUpdatesState(state);
+      return state;
+    } catch (err) {
+      pushNotice(cleanError(err), "error");
+      return null;
+    }
+  }, [pushNotice]);
+
+  const downloadUpdate = useCallback(async () => {
+    try {
+      const state = await api.updates.download();
+      setUpdatesState(state);
+      return state;
+    } catch (err) {
+      pushNotice(cleanError(err), "error");
+      return null;
+    }
+  }, [pushNotice]);
+
+  const installUpdate = useCallback(async () => {
+    try {
+      const state = await api.updates.install();
+      setUpdatesState(state);
+      return state;
+    } catch (err) {
+      pushNotice(cleanError(err), "error");
+      return null;
+    }
+  }, [pushNotice]);
+
   const resolveModelRef = useCallback(
     (override?: SenastrModelRef | null): SenastrModelRef | null => {
       const enabledProviders = providers.filter((provider) => provider.enabled && provider.models.length > 0);
@@ -552,9 +930,14 @@ export function useSenastr() {
 
   /** Send implementation shared by send(), retry and queue flush. */
   const flushQueueSend = useCallback(
-    async (session: Session, rawText: string, modeOverride?: SessionMode) => {
+    async (
+      session: Session,
+      rawText: string,
+      modeOverride?: SessionMode,
+      attachments: MessageAttachment[] = [],
+    ) => {
       const trimmed = rawText.trim();
-      if (!trimmed) return;
+      if (!trimmed && attachments.length === 0) return;
       if (inFlightSessionRef.current) {
         // Lost a race with another turn — requeue at the front.
         const id = ++queueSeq.current;
@@ -584,13 +967,20 @@ export function useSenastr() {
       inFlightSessionRef.current = session.id;
       setStreamSessionId(session.id);
       setBusy(true);
-      setStream({ text: "", blocks: [] });
+      setStream({ text: "", reasoning: "", blocks: [] });
       if (session.mode !== mode) {
         // Optimistic: main applies the same mode with the send.
         setActiveSession((prev) => (prev && prev.id === session.id ? { ...prev, mode } : prev));
       }
       try {
-        await api.chat.send({ sessionId: session.id, text: trimmed, modelRef: ref, mode });
+        await api.chat.send({
+          sessionId: session.id,
+          text: trimmed,
+          modelRef: ref,
+          mode,
+          attachments: attachments.length ? attachments : undefined,
+          thinkingLevel: thinkingLevelFor(session.id),
+        });
       } catch (err) {
         inFlightSessionRef.current = null;
         setBusy(false);
@@ -600,14 +990,14 @@ export function useSenastr() {
         pushNotice(cleanError(err), "error");
       }
     },
-    [defaultAgentMode, pushNotice, resolveModelRef, sessionPrefs],
+    [defaultAgentMode, pushNotice, resolveModelRef, sessionPrefs, thinkingLevelFor],
   );
   flushRef.current = flushQueueSend;
 
   const send = useCallback(
-    async (text: string) => {
+    async (text: string, attachments: MessageAttachment[] = []) => {
       const trimmed = text.trim();
-      if (!trimmed) return;
+      if (!trimmed && attachments.length === 0) return;
       const session = activeSessionRef.current;
       if (!session) {
         pushNotice("Create a session first", "error");
@@ -623,7 +1013,7 @@ export function useSenastr() {
         pushNotice("Prompt queued — will send when the turn finishes", "info");
         return;
       }
-      await flushQueueSend(session, trimmed);
+      await flushQueueSend(session, trimmed, undefined, attachments);
     },
     [busy, flushQueueSend, pushNotice],
   );
@@ -768,6 +1158,25 @@ export function useSenastr() {
     }
   }, [pushNotice, renameSession, resolveModelRef]);
 
+  /** /compact — shrink the transcript window on demand. */
+  const compactContext = useCallback(async () => {
+    const session = activeSessionRef.current;
+    if (!session) return null;
+    try {
+      const result = await api.chat.compact({ sessionId: session.id });
+      setActiveSession(result.session);
+      setSessions(await api.session.list());
+      pushNotice(
+        result.compacted ? `Compacted ${result.dropped} messages` : "Nothing to compact yet",
+        "info",
+      );
+      return result;
+    } catch (err) {
+      pushNotice(cleanError(err), "error");
+      return null;
+    }
+  }, [pushNotice]);
+
   const markNotificationsRead = useCallback(
     async (params: { id?: string; all?: boolean }) => {
       setNotifications((prev) =>
@@ -902,6 +1311,37 @@ export function useSenastr() {
     setWorkPanelTab,
     searchOpen,
     setSearchOpen,
+    paletteOpen,
+    setPaletteOpen,
+    commands,
+    refreshCommands,
+    searchCommandsRemote,
+    fileIndex,
+    ensureFileIndex,
+    updatesState,
+    checkForUpdates,
+    downloadUpdate,
+    installUpdate,
+    hostSettings,
+    language,
+    setLanguage,
+    setProxy,
+    projects,
+    projectGroups,
+    refreshProjects,
+    addProject,
+    updateProject,
+    removeProject,
+    setProjectGroup,
+    deleteProjectGroup,
+    usageHistory,
+    refreshUsage,
+    importState,
+    scanImports,
+    runImport,
+    saveRevision,
+    activateRevision,
+    addAttachment,
     // prefs
     sessionPrefs,
     updateSessionPrefs,
@@ -915,6 +1355,9 @@ export function useSenastr() {
     setDefaultAgentMode,
     permissionModeFor,
     agentModeFor,
+    thinkingLevelFor,
+    setThinkingLevel,
+    goalModeFor: agentModeFor,
     // turns
     queued,
     queuePrompt,
@@ -938,6 +1381,7 @@ export function useSenastr() {
     resolveAsk,
     approvePlan,
     rejectPlan,
+    compactContext,
     dismissPlan,
     enhancePrompt,
     suggestTitle,

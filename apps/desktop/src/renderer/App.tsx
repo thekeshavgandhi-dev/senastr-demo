@@ -10,6 +10,7 @@ import { SettingsView } from "./components/SettingsView";
 import { PermissionDialog } from "./components/PermissionDialog";
 import { SearchDialog } from "./components/SearchDialog";
 import { ToastHost } from "./components/Toast";
+import { CommandPalette } from "./components/CommandPalette";
 import { WorkPanel } from "./components/workpanel/WorkPanel";
 import { hasBridge } from "./lib/api";
 
@@ -63,9 +64,21 @@ function AppShell() {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.ctrlKey || e.metaKey;
       const typing = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target as HTMLElement)?.tagName ?? "");
-      if (mod && e.key.toLowerCase() === "k") {
+      if (mod && e.shiftKey && e.key.toLowerCase() === "p") {
+        e.preventDefault();
+        s.setPaletteOpen(!s.paletteOpen);
+      } else if (mod && e.key.toLowerCase() === "k") {
         e.preventDefault();
         s.setSearchOpen(!s.searchOpen);
+      } else if (mod && (e.key === "." || e.code === "Period")) {
+        // Abort key (parity: `abort` = Mod+Period).
+        if (!typing) {
+          e.preventDefault();
+          s.stop();
+        }
+      } else if (mod && e.key.toLowerCase() === "n") {
+        e.preventDefault();
+        void s.newSession(s.activeSession?.projectPath ?? undefined);
       } else if (mod && e.key.toLowerCase() === "b") {
         e.preventDefault();
         s.setSidebarCollapsed(!s.sidebarCollapsed);
@@ -80,6 +93,8 @@ function AppShell() {
         if (s.view === "chat") void s.newSession(s.activeSession?.projectPath ?? undefined);
       } else if (e.key === "Escape" && s.searchOpen) {
         s.setSearchOpen(false);
+      } else if (e.key === "Escape" && s.paletteOpen) {
+        s.setPaletteOpen(false);
       } else if (typing) {
         return;
       }
@@ -98,6 +113,7 @@ function AppShell() {
       <div className="app settings-mode">
         <SettingsView store={s} />
         <SearchDialog store={s} />
+        <CommandPalette store={s} />
         <ToastHost notices={s.notices} onDismiss={s.dismissNotice} />
         {s.pendingPermission && (
           <PermissionDialog
@@ -127,6 +143,7 @@ function AppShell() {
       </main>
       {s.workPanelOpen && <WorkPanel store={s} />}
       <SearchDialog store={s} />
+      <CommandPalette store={s} />
       <ToastHost notices={s.notices} onDismiss={s.dismissNotice} />
       {s.pendingPermission && (
         <PermissionDialog

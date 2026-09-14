@@ -12,9 +12,6 @@ const api = {
     dataDir: () => invoke("app/data-dir"),
     openExternal: (url: string) => invoke("app/open-external", { url }),
   },
-  project: {
-    open: () => invoke("project/open"),
-  },
   session: {
     list: () => invoke("session/list"),
     create: (params: { title?: string; projectPath?: string | null }) => invoke("session/create", params),
@@ -24,9 +21,70 @@ const api = {
     setProject: (id: string, projectPath: string | null) => invoke("session/set-project", { id, projectPath }),
     setMode: (id: string, mode: unknown) => invoke("session/set-mode", { id, mode }),
     appendMessages: (id: string, messages: unknown[]) => invoke("session/append-messages", { id, messages }),
+    fork: (params: { id: string; title?: string; messageCount?: number }) => invoke("session/fork", params),
+    setThinking: (params: { id: string; level: string | null }) => invoke("session/set-thinking", params),
+    scratch: (params: { sessionId: string; create?: boolean }) => invoke("session/scratch", params),
+    openScratch: (sessionId: string) => invoke("session/open-scratch", { sessionId }),
+    openFolder: (path: string) => invoke("session/open-folder", { path }),
+    revisions: {
+      list: (sessionId: string) => invoke("session/revisions/list", { sessionId }),
+      save: (params: { sessionId: string; label?: string }) => invoke("session/revisions/save", params),
+      activate: (params: { sessionId: string; revisionId: string }) => invoke("session/revisions/activate", params),
+      remove: (params: { sessionId: string; revisionId: string }) => invoke("session/revisions/delete", params),
+    },
+    importScan: (params: { sources?: string[] } = {}) => invoke("session/import-scan", params),
+    importRun: (params: { sessions: unknown[]; projectPathOverride?: string | null }) =>
+      invoke("session/import-run", params),
+  },
+  modelConfig: {
+    importScan: () => invoke("model-config/import-scan"),
+    importRun: (params: { entries: unknown[] }) => invoke("model-config/import-run", params),
+  },
+  attachment: {
+    add: (params: unknown) => invoke("attachment/add", params),
+    read: (storeId: string) => invoke("attachment/read", { storeId }),
+    remove: (storeId: string) => invoke("attachment/delete", { storeId }),
+  },
+  project: {
+    open: () => invoke("project/open"),
+    list: () => invoke("project/list"),
+    add: (params: unknown) => invoke("project/add", params),
+    update: (params: unknown) => invoke("project/update", params),
+    remove: (path: string) => invoke("project/remove", { path }),
+    groupList: () => invoke("project-group/list"),
+    groupSet: (params: unknown) => invoke("project-group/set", params),
+    groupDelete: (id: string) => invoke("project-group/delete", { id }),
+  },
+  stats: {
+    usage: (query: unknown = {}) => invoke("stats/usage", query),
+    recordUsage: (params: unknown) => invoke("stats/record-usage", params),
+  },
+  settings: {
+    get: () => invoke("settings/get"),
+    set: (patch: unknown) => invoke("settings/set", patch),
+  },
+  fs: {
+    index: (params: { projectPath: string; force?: boolean; limit?: number }) => invoke("fs/index", params),
+  },
+  command: {
+    list: (query: unknown = {}) => invoke("command/list", query),
+  },
+  updates: {
+    getState: () => invoke("updates/get-state"),
+    check: () => invoke("updates/check"),
+    download: () => invoke("updates/download"),
+    install: () => invoke("updates/install"),
+    openReleases: () => invoke("updates/open-releases"),
+  },
+  clipboard: {
+    recordPaste: (text: string) => invoke("clipboard/record-paste", { text }),
+    list: () => invoke("clipboard/list"),
+    clear: () => invoke("clipboard/clear"),
+    copy: (text: string) => invoke("clipboard/copy", { text }),
   },
   file: {
     pick: (projectPath?: string | null) => invoke("file/pick", { projectPath }),
+    pickPhotos: () => invoke("composer/pick-photos"),
   },
   provider: {
     list: () => invoke("provider/list"),
@@ -92,6 +150,8 @@ const api = {
     list: () => invoke("notify/list"),
     markRead: (params: { id?: string; all?: boolean }) => invoke("notify/mark-read", params),
     clear: () => invoke("notify/clear"),
+    showNative: (params: unknown) => invoke("notify/show-native", params),
+    setViewingSession: (sessionId: string | null) => invoke("notify/set-viewing-session", { sessionId }),
   },
   chat: {
     send: (params: { sessionId: string; text: string; modelRef: { providerId: string; model: string }; mode?: unknown }) =>
@@ -101,6 +161,7 @@ const api = {
     delegations: (sessionId: string) => invoke("chat/delegations", { sessionId }),
     enhance: (params: unknown) => invoke("chat/enhance", params),
     suggestTitle: (params: unknown) => invoke("chat/suggest-title", params),
+    compact: (params: { sessionId: string; keep?: number }) => invoke("chat/compact", params),
   },
   /**
    * Subscribe to live events (agent turn events + permission requests).

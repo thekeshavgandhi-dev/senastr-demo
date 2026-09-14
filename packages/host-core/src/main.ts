@@ -15,6 +15,12 @@ import { SubagentService } from "./subagents";
 import { ScheduledService } from "./scheduled";
 import { ReviewStore } from "./review";
 import { InstructionService } from "./instructions";
+import { RevisionService } from "./revisions";
+import { ProjectService } from "./projects";
+import { SettingsService } from "./settings";
+import { StatsService } from "./stats";
+import { AttachmentService } from "./attachments";
+import { ScratchService } from "./scratch";
 import { registerMethods } from "./methods";
 
 /**
@@ -66,6 +72,19 @@ function main(): void {
   const scheduled = new ScheduledService(dataDir);
   const review = new ReviewStore(join(dataDir, "review"));
   const instructionService = new InstructionService(dataDir);
+  const revisions = new RevisionService(join(dataDir, "revisions"));
+  const projects = new ProjectService(dataDir);
+  const settings = new SettingsService(dataDir);
+  const stats = new StatsService(dataDir);
+  const attachments = new AttachmentService(dataDir);
+  const scratch = new ScratchService(dataDir);
+  // Scratch directories are session-scoped: drop the ones left behind by
+  // sessions that no longer exist, plus anything stale (parity: scratch sweep).
+  try {
+    scratch.sweep(new Set(sessions.list().map((s) => s.id)));
+  } catch {
+    /* a failed sweep must never block startup */
+  }
   const tools = new ToolRunner(sessions, permissions, plugins, mcp, review);
 
   registerMethods({
@@ -82,10 +101,28 @@ function main(): void {
     scheduled,
     review,
     instructions: instructionService,
+    revisions,
+    projects,
+    settings,
+    stats,
+    attachments,
+    scratch,
   });
 
   let shuttingDown = false;
-  const flushables = [providers, permissions, plugins, skills, mcp, subagents, scheduled, instructionService];
+  const flushables = [
+    providers,
+    permissions,
+    plugins,
+    skills,
+    mcp,
+    subagents,
+    scheduled,
+    instructionService,
+    projects,
+    settings,
+    stats,
+  ];
   const shutdown = async (signal: string): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;

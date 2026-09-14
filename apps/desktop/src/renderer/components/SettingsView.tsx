@@ -5,6 +5,8 @@ import { api, cleanError } from "../lib/api";
 import { prefs, type AgentMode, type PermissionMode, type ThemePref } from "../lib/prefs";
 import { InstructionsSettings } from "./settings/InstructionsSettings";
 import { McpSettings } from "./settings/McpSettings";
+import { NetworkSettings } from "./settings/NetworkSettings";
+import { UsageSettings } from "./settings/UsageSettings";
 import { ScheduledSettings } from "./settings/ScheduledSettings";
 import { SubagentsSettings } from "./settings/SubagentsSettings";
 import { ModelsSettings } from "./settings/ModelsSettings";
@@ -35,6 +37,8 @@ const NAV: Array<{
   { id: "scheduled", label: "Scheduled", title: "Scheduled tasks", description: "Headless agent runs on a cadence", icon: "terminal", group: "Agent", keywords: "schedule cron recurring automation nightly task" },
   { id: "mcp", label: "MCP", title: "MCP servers", description: "Connect local commands and Streamable HTTP tool servers", icon: "server", group: "Agent", keywords: "model context protocol tools stdio http server" },
   { id: "plugins", label: "Extensions", title: "Extensions", description: "Install and manage local agent plugins", icon: "plug", group: "Agent", keywords: "plugins marketplace tools install local" },
+  { id: "usage", label: "Usage", title: "Token usage", description: "Tokens and turns recorded for every completed run", icon: "chart", group: "System", keywords: "tokens usage stats cost history week month chart" },
+  { id: "network", label: "Network", title: "Network & proxy", description: "Outbound proxy used by models, MCP servers and commands", icon: "globe", group: "System", keywords: "proxy network http socks bypass corporate firewall offline" },
   { id: "permissions", label: "Permissions", title: "Permission grants", description: "Review standing approvals for privileged tools", icon: "shield", group: "Security", keywords: "grants security allow write execute revoke" },
   { id: "about", label: "About", title: "About senastr", description: "Version, storage, privacy, and architecture", icon: "info", group: "System", keywords: "version data privacy local host core" },
 ];
@@ -60,6 +64,8 @@ export function SettingsView({ store }: { store: SenastrStore }) {
     scheduled: <ScheduledSettings store={store} />,
     mcp: <McpSettings store={store} />,
     plugins: <PluginsSettings store={store} />,
+    usage: <UsageSettings store={store} />,
+    network: <NetworkSettings store={store} />,
     permissions: <PermissionsSettings store={store} />,
     about: <AboutSettings version={store.version} dataDir={store.dataDir} />,
   };
