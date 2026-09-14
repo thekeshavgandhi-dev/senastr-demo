@@ -18,6 +18,7 @@ import {
   type Usage,
 } from "@senastr/shared";
 import type { AgentOptions, HostBridge, ModelSpec, Provider } from "./types";
+import type { MessageAttachment } from "@senastr/shared";
 import { createProvider } from "./providers/factory";
 import { compactHistory, type CompactResult } from "./context";
 import { defaultSystemPrompt } from "./messages";
@@ -26,6 +27,8 @@ export interface TurnParams {
   sessionId: string;
   userMessage: string;
   model: ModelSpec;
+  /** Files/images attached to this prompt (parity: prompt attachments). */
+  attachments?: MessageAttachment[];
 }
 
 const DEFAULT_MAX_STEPS = 24;
@@ -41,6 +44,16 @@ interface PendingAsk {
   request: AskRequest;
   resolve: (answers: AskAnswers | typeof ASK_ABORTED) => void;
 }
+
+export const GOAL_MODE_PROMPT = [
+  "",
+  "GOAL MODE: the user locked an objective and acceptance criteria instead of a plan.",
+  "- Work autonomously toward the stated outcome; you choose the path.",
+  "- Use every tool you need (read, write, run, delegate) — privileged calls still ask for approval.",
+  "- Verify your own work: run tests, re-read the result, and iterate until the outcome is met.",
+  "- Do not stop to ask how to proceed unless the objective itself is ambiguous or destructive.",
+  "- Finish with a short report: what changed, how you verified it, and anything left undone.",
+].join("\n");
 
 export const PLAN_MODE_PROMPT = [
   "",
@@ -96,6 +109,8 @@ export class AgentRuntime {
       throw new Error("no model selected");
     }
     const planMode = session.mode === "plan";
+    const goalMode = session.mode === "goal";
+    const thinkingLevel = session.thinkingLevel ?? params.model.thinkingLevel;
 
     const abort = new AbortController();
     this.active.set(session.id, abort);
@@ -106,7 +121,9 @@ export class AgentRuntime {
 
     try {
       yield { type: "turn/start", sessionId: session.id, turnId: randomUUID() };
-      await this.host.appendMessages(session.id, [makeMessage("user", params.userMessage)]);
+      await this.host.appendMessages(session.id, [
+        { ...makeMessage("user", params.userMessage), ...(params.attachments?.length ? { attachments: params.attachments } : {}) },
+      ]);
 
       const provider = this.makeProvider(params.model);
       let step = 0;
@@ -124,20 +141,28 @@ export class AgentRuntime {
         let system = withActiveSkills(defaultSystemPrompt(session.projectPath!), skills);
         system = withProjectContext(system, contexts);
         if (planMode) system += PLAN_MODE_PROMPT;
+        if (goalMode) system += GOAL_MODE_PROMPT;
 
         let text = "";
+        let reasoning = "";
         const calls: ToolCall[] = [];
 
         for await (const evt of provider.streamChat({
           model: params.model.model,
           system,
-          messages: compaction.messages,
+          messages: await this.hydrateAttachments(compaction.messages),
           tools: planMode ? tools.filter((t) => t.name !== "Task") : tools,
           signal: abort.signal,
+          thinkingLevel,
+          temperature: params.model.temperature,
+          maxTokens: params.model.maxOutputTokens,
         })) {
           if (evt.kind === "text") {
             text += evt.delta;
             yield { type: "assistant/delta", delta: evt.delta };
+          } else if (evt.kind === "reasoning") {
+            reasoning += evt.delta;
+            yield { type: "assistant/reasoning", delta: evt.delta };
           } else if (evt.kind === "tool-call") {
             calls.push({ id: evt.id, name: evt.name, arguments: evt.arguments });
           } else if (evt.kind === "done") {
@@ -150,12 +175,12 @@ export class AgentRuntime {
         }
 
         if (calls.length === 0) {
-          await this.host.appendMessages(session.id, [makeMessage("assistant", text)]);
+          await this.host.appendMessages(session.id, [makeMessage("assistant", text, reasoning)]);
           if (stopReason !== "aborted") stopReason = "stop";
           break;
         }
 
-        await this.host.appendMessages(session.id, [makeMessage("assistant", text, calls)]);
+        await this.host.appendMessages(session.id, [makeMessage("assistant", text, reasoning, calls)]);
         for (const call of calls) {
           if (abort.signal.aborted) break;
           yield { type: "tool/call", call };
@@ -229,6 +254,22 @@ export class AgentRuntime {
     } finally {
       this.active.delete(session.id);
       this.failSessionAsks(session.id);
+      // Token accounting is written by the host so usage survives a closed
+      // window and feeds the stats view (parity: stats/getTokenUsageHistory).
+      if (this.host.recordUsage && (usage.inputTokens || usage.outputTokens)) {
+        try {
+          await this.host.recordUsage({
+            sessionId: session.id,
+            providerId: params.model.providerId,
+            model: params.model.model,
+            inputTokens: usage.inputTokens,
+            outputTokens: usage.outputTokens,
+            stopReason,
+          });
+        } catch {
+          /* usage accounting must never fail a turn */
+        }
+      }
       yield {
         type: "turn/end",
         stopReason,
@@ -249,6 +290,42 @@ export class AgentRuntime {
     controller.abort();
     this.failSessionAsks(sessionId);
     return true;
+  }
+
+  /**
+   * Resolve image attachments to base64 for the model request. The transcript
+   * keeps only the store id, so this runs on every step (cheap: images are
+   * small and the host caches nothing it cannot re-read).
+   */
+  private async hydrateAttachments(messages: ChatMessage[]): Promise<ChatMessage[]> {
+    if (!this.host.readAttachment) return messages;
+    let needed = false;
+    for (const message of messages) {
+      if (message.attachments?.some((a) => a.kind === "image" && a.storeId && !a.dataBase64)) {
+        needed = true;
+        break;
+      }
+    }
+    if (!needed) return messages;
+    return Promise.all(
+      messages.map(async (message) => {
+        if (!message.attachments?.length) return message;
+        const attachments = await Promise.all(
+          message.attachments.map(async (attachment) => {
+            if (attachment.kind !== "image" || !attachment.storeId || attachment.dataBase64) return attachment;
+            try {
+              const resolved = await this.host.readAttachment?.(attachment.storeId);
+              if (!resolved) return attachment;
+              return { ...attachment, mimeType: resolved.mimeType || attachment.mimeType, dataBase64: resolved.base64 };
+            } catch {
+              // A missing image must not break the turn; the note stays in text.
+              return attachment;
+            }
+          }),
+        );
+        return { ...message, attachments };
+      }),
+    );
   }
 
   /* ------------------------------------------------------------------ */
@@ -535,7 +612,7 @@ export class AgentRuntime {
         const report = text.trim() || "(the subagent produced no output)";
         return { status: "done", report: capReport(report), turns, usage };
       }
-      history.push(makeMessage("assistant", text, calls));
+      history.push(makeMessage("assistant", text, undefined, calls));
       for (const call of calls) {
         if (opts.parentSignal.aborted) break;
         const result = await this.host.runTool({ sessionId: opts.sessionId, tool: call.name, args: call.arguments });
@@ -585,12 +662,18 @@ export class AgentRuntime {
   }
 }
 
-function makeMessage(role: ChatMessage["role"], content: string, toolCalls?: ToolCall[]): ChatMessage {
+function makeMessage(
+  role: ChatMessage["role"],
+  content: string,
+  reasoning?: string,
+  toolCalls?: ToolCall[],
+): ChatMessage {
   return {
     id: randomUUID(),
     role,
     content,
     createdAt: Date.now(),
+    ...(reasoning ? { reasoning } : {}),
     ...(toolCalls ? { toolCalls } : {}),
   };
 }

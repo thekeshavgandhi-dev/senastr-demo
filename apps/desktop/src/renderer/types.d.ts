@@ -1,6 +1,14 @@
 import type {
   AgentEvent,
   AppNotification,
+  AppSettings,
+  CommandItem,
+  ExternalAgentSource,
+  ExternalSessionSummary,
+  FileIndexResult,
+  ImportRunResult,
+  ImportScanResult,
+  MessageAttachment,
   AskAnswers,
   AskRequest,
   CapabilityLevel,
@@ -20,8 +28,15 @@ import type {
   ProviderDiscoveryInput,
   ProviderSummary,
   ProviderTestResult,
+  ProjectGroup,
+  ProjectRecord,
   PullSummary,
   ReviewSnapshot,
+  ScratchInfo,
+  SessionRevision,
+  ThinkingLevel,
+  TokenUsageHistory,
+  UpdateState,
   ScheduledRun,
   ScheduledTask,
   ScheduledTaskInput,
@@ -46,6 +61,7 @@ export type SenastrEvent =
   | { kind: "notify/added"; notification: AppNotification }
   | { kind: "scheduled/started"; taskId: string; name: string }
   | { kind: "scheduled/finished"; taskId: string; status: string; sessionId?: string; error?: string }
+  | { kind: "updates/state"; state: UpdateState }
   | { kind: "tray/new-task" };
 
 export interface SenastrApi {
@@ -56,6 +72,62 @@ export interface SenastrApi {
   };
   project: {
     open(): Promise<string | null>;
+    list(): Promise<{ projects: ProjectRecord[]; groups: ProjectGroup[] }>;
+    add(params: { path: string; name?: string; pinned?: boolean; groupId?: string }): Promise<ProjectRecord>;
+    update(params: {
+      path: string;
+      name?: string;
+      pinned?: boolean;
+      groupId?: string | null;
+    }): Promise<ProjectRecord>;
+    remove(path: string): Promise<{ ok: boolean }>;
+    groupList(): Promise<ProjectGroup[]>;
+    groupSet(params: { id?: string; name: string }): Promise<ProjectGroup>;
+    groupDelete(id: string): Promise<{ ok: boolean }>;
+  };
+  stats: {
+    usage(query?: { startDate?: number; endDate?: number; bucket?: "day" | "week" | "month"; sessionId?: string }): Promise<TokenUsageHistory>;
+    recordUsage(params: unknown): Promise<unknown>;
+  };
+  settings: {
+    get(): Promise<AppSettings>;
+    set(patch: Partial<AppSettings>): Promise<AppSettings>;
+  };
+  fs: {
+    index(params: { projectPath: string; force?: boolean; limit?: number }): Promise<FileIndexResult>;
+  };
+  command: {
+    list(query?: { query?: string; limit?: number }): Promise<{ commands: CommandItem[]; total: number }>;
+  };
+  updates: {
+    getState(): Promise<UpdateState>;
+    check(): Promise<UpdateState>;
+    download(): Promise<UpdateState>;
+    install(): Promise<UpdateState>;
+    openReleases(): Promise<{ ok: boolean }>;
+  };
+  clipboard: {
+    recordPaste(text: string): Promise<{ ok: boolean; entries: number }>;
+    list(): Promise<Array<{ id: string; text: string; createdAt: number; bytes: number }>>;
+    clear(): Promise<{ ok: boolean }>;
+    copy(text: string): Promise<{ ok: boolean }>;
+  };
+  attachment: {
+    add(params: {
+      sessionId: string;
+      kind?: "image" | "file";
+      name?: string;
+      mimeType?: string;
+      dataBase64?: string;
+      path?: string;
+      text?: string;
+    }): Promise<MessageAttachment>;
+    read(storeId: string): Promise<{ mimeType: string; base64: string; name: string }>;
+    remove(storeId: string): Promise<{ ok: boolean }>;
+  };
+  modelConfig: {
+    importScan(): Promise<{ entries: Array<Record<string, unknown>> }>;
+    importRun(params: { entries: Array<Record<string, unknown>> }): Promise<{ ok: boolean; providers: string[] }>;
   };
   session: {
     list(): Promise<SessionMeta[]>;
@@ -66,9 +138,26 @@ export interface SenastrApi {
     setProject(id: string, projectPath: string | null): Promise<Session>;
     setMode(id: string, mode: SessionMode): Promise<Session>;
     appendMessages(id: string, messages: ChatMessage[]): Promise<Session>;
+    fork(params: { id: string; title?: string; messageCount?: number }): Promise<Session>;
+    setThinking(params: { id: string; level: ThinkingLevel | null }): Promise<Session>;
+    scratch(params: { sessionId: string; create?: boolean }): Promise<ScratchInfo>;
+    openScratch(sessionId: string): Promise<{ ok: boolean; dir: string; error?: string }>;
+    openFolder(path: string): Promise<{ ok: boolean; error?: string }>;
+    revisions: {
+      list(sessionId: string): Promise<SessionRevision[]>;
+      save(params: { sessionId: string; label?: string }): Promise<SessionRevision>;
+      activate(params: { sessionId: string; revisionId: string }): Promise<Session>;
+      remove(params: { sessionId: string; revisionId: string }): Promise<{ ok: boolean }>;
+    };
+    importScan(params?: { sources?: ExternalAgentSource[] }): Promise<ImportScanResult>;
+    importRun(params: {
+      sessions: ExternalSessionSummary[];
+      projectPathOverride?: string | null;
+    }): Promise<ImportRunResult>;
   };
   file: {
     pick(projectPath?: string | null): Promise<string[]>;
+    pickPhotos(): Promise<Array<{ name: string; mimeType: string; dataBase64: string; bytes: number }>>;
   };
   provider: {
     list(): Promise<ProviderSummary[]>;
@@ -151,14 +240,31 @@ export interface SenastrApi {
     list(): Promise<AppNotification[]>;
     markRead(params: { id?: string; all?: boolean }): Promise<{ ok: boolean }>;
     clear(): Promise<{ ok: boolean }>;
+    showNative(params: {
+      title: string;
+      body?: string;
+      silent?: boolean;
+      sessionId?: string;
+      taskId?: string;
+      kind?: AppNotification["kind"];
+    }): Promise<{ ok: boolean; shown: boolean; error?: string }>;
+    setViewingSession(sessionId: string | null): Promise<{ ok: boolean }>;
   };
   chat: {
-    send(params: { sessionId: string; text: string; modelRef: SenastrModelRef; mode?: SessionMode }): Promise<{ ok: boolean }>;
+    send(params: {
+      sessionId: string;
+      text: string;
+      modelRef: SenastrModelRef;
+      mode?: SessionMode;
+      attachments?: MessageAttachment[];
+      thinkingLevel?: ThinkingLevel | null;
+    }): Promise<{ ok: boolean }>;
     stop(sessionId: string): Promise<boolean>;
     resolveAsk(requestId: string, answers: AskAnswers): Promise<boolean>;
     delegations(sessionId: string): Promise<DelegationSummary[]>;
     enhance(params: { text: string; modelRef: SenastrModelRef }): Promise<{ text: string; usage: Usage }>;
     suggestTitle(params: { modelRef: SenastrModelRef; excerpt: string }): Promise<{ title: string }>;
+    compact(params: { sessionId: string; keep?: number }): Promise<{ compacted: boolean; dropped: number; session: Session }>;
   };
   onEvent(cb: (ev: SenastrEvent) => void): () => void;
 }
@@ -172,5 +278,13 @@ declare global {
 // Re-exported so components can import render-relevant contracts from one place.
 export type {
   AskRequest,
+  CommandItem,
+  ExternalSessionSummary,
+  MessageAttachment,
   PlanProposal,
+  ProjectGroup,
+  ProjectRecord,
+  SessionRevision,
+  ThinkingLevel,
+  UpdateState,
 };

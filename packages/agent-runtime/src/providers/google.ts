@@ -1,4 +1,4 @@
-import type { ChatMessage, Usage } from "@senastr/shared";
+import { googleThinkingBudgetFor, type ChatMessage, type Usage } from "@senastr/shared";
 import type { ModelSpec, Provider, ProviderChatParams, ProviderEvent } from "../types";
 import { parseSseLines, safeReadText } from "./openai";
 import { postToModel } from "./resilient";
@@ -16,9 +16,16 @@ export class GoogleGenerativeAIProvider implements Provider {
     if (params.system) {
       body.systemInstruction = { parts: [{ text: params.system }] };
     }
-    if (params.maxTokens) {
-      body.generationConfig = { maxOutputTokens: params.maxTokens };
+    const generationConfig: Record<string, unknown> = {};
+    if (params.maxTokens) generationConfig.maxOutputTokens = params.maxTokens;
+    if (typeof params.temperature === "number" && !params.thinkingLevel) {
+      generationConfig.temperature = params.temperature;
     }
+    if (params.thinkingLevel) {
+      const budget = googleThinkingBudgetFor(params.thinkingLevel);
+      if (budget !== null) generationConfig.thinkingConfig = { thinkingBudget: budget, includeThoughts: true };
+    }
+    if (Object.keys(generationConfig).length > 0) body.generationConfig = generationConfig;
     if (params.tools.length) {
       body.tools = [
         {
@@ -63,7 +70,9 @@ export class GoogleGenerativeAIProvider implements Provider {
       const candidate = chunk?.candidates?.[0];
       for (const part of candidate?.content?.parts ?? []) {
         if (typeof part?.text === "string" && part.text) {
-          yield { kind: "text", delta: part.text };
+          // Gemini flags thinking text with `thought: true`.
+          if (part.thought === true) yield { kind: "reasoning", delta: part.text };
+          else yield { kind: "text", delta: part.text };
         }
         if (part?.functionCall?.name) {
           callIndex += 1;
@@ -97,7 +106,20 @@ export function toGeminiContents(messages: ChatMessage[]): unknown[] {
   const toolNames = new Map<string, string>();
   for (const message of messages) {
     if (message.role === "user") {
-      out.push({ role: "user", parts: [{ text: message.content }] });
+      const parts: unknown[] = [];
+      const images = (message.attachments ?? []).filter(
+        (a) => a.kind === "image" && typeof a.dataBase64 === "string" && a.dataBase64.length > 0,
+      );
+      const text = (message.attachments ?? [])
+        .filter((a) => a.text)
+        .map((a) => `--- attached: ${a.name} ---\n${a.text}`)
+        .join("\n");
+      const body = [message.content, text].filter(Boolean).join("\n\n");
+      if (body) parts.push({ text: body });
+      for (const image of images) {
+        parts.push({ inlineData: { mimeType: image.mimeType, data: image.dataBase64 } });
+      }
+      out.push({ role: "user", parts: parts.length > 0 ? parts : [{ text: "" }] });
       continue;
     }
     if (message.role === "assistant") {

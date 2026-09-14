@@ -1,6 +1,38 @@
 import type { ModelSpec } from "../types";
 
 /**
+ * Outbound proxy support (parity: pi-desktop network proxy).
+ *
+ * Node's built-in fetch ignores HTTP_PROXY, so a custom proxy is applied with
+ * an undici `ProxyAgent` dispatcher when undici is resolvable (it ships with
+ * the app's dependency tree in packaged builds). Without undici the request
+ * still goes out — direct — and the settings UI says so.
+ */
+let dispatcherPromise: Promise<unknown | undefined> | null = null;
+
+function proxyDispatcher(spec: ModelSpec): Promise<unknown | undefined> {
+  const proxy = spec.proxy;
+  if (!proxy || proxy.mode !== "custom" || !proxy.url) return Promise.resolve(undefined);
+  if (!dispatcherPromise) {
+    dispatcherPromise = (async () => {
+      try {
+        // `module.createRequire` keeps the optional dependency out of the
+        // compiled output: a missing undici is a runtime miss, not a build error.
+        const nodeModule = (await import("node:module")) as unknown as {
+          createRequire: (path: string) => (id: string) => unknown;
+        };
+        const req = nodeModule.createRequire(`${process.cwd()}/`);
+        const undici = req("undici") as { ProxyAgent?: new (options: { uri: string }) => unknown };
+        return undici?.ProxyAgent ? new undici.ProxyAgent({ uri: proxy.url as string }) : undefined;
+      } catch {
+        return undefined;
+      }
+    })();
+  }
+  return dispatcherPromise;
+}
+
+/**
  * Resilient model HTTP layer: key-pool rotation, per-key cooldowns and an
  * optional client-side per-minute throttle, shared by every provider.
  *
@@ -298,6 +330,8 @@ export interface ResilientRequest {
 export async function postToModel({ spec, signal, build }: ResilientRequest): Promise<Response> {
   const keys = effectiveApiKeys(spec);
   const runtime = runtimeFor(spec);
+  const dispatcher = await proxyDispatcher(spec);
+  const transport = dispatcher ? ({ dispatcher } as Record<string, unknown>) : {};
 
   if (keys.length === 0) {
     // Keyless (local endpoint): one throttled request, nothing to rotate.
@@ -309,6 +343,7 @@ export async function postToModel({ spec, signal, build }: ResilientRequest): Pr
         headers: request.headers,
         body: request.body,
         signal,
+        ...transport,
       });
     } catch (err) {
       if (signal?.aborted) throw err;
@@ -336,6 +371,7 @@ export async function postToModel({ spec, signal, build }: ResilientRequest): Pr
         headers: request.headers,
         body: request.body,
         signal,
+        ...transport,
       });
     } catch (err) {
       if (signal?.aborted) throw err;

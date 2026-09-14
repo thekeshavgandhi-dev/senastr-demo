@@ -10,6 +10,19 @@ export { ScheduledService, computeNextRun, nextCronRun, parseCron } from "./sche
 export { ReviewStore } from "./review";
 export { InstructionService } from "./instructions";
 export { McpService, mcpToolName, MASKED_SECRET, type McpQuery } from "./mcp";
+export { RevisionService } from "./revisions";
+export { ProjectService } from "./projects";
+export { SettingsService } from "./settings";
+export { StatsService } from "./stats";
+export { AttachmentService } from "./attachments";
+export { ScratchService } from "./scratch";
+export { indexProject, clearIndexCache } from "./fs-index";
+export {
+  scanExternalSessions,
+  convertExternalSession,
+  scanModelConfigs,
+  importedSessionId,
+} from "./importers";
 export { registerMethods, type MethodContext } from "./methods";
 export { JsonFileStore } from "./store";
 export {

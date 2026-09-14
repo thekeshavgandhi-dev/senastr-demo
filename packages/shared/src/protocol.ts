@@ -101,6 +101,49 @@ export const Methods = {
   sessionSetProject: "session/set-project",
   sessionDelete: "session/delete",
   sessionAppendMessages: "session/append-messages",
+  sessionReplaceMessages: "session/replace-messages",
+  sessionFork: "session/fork",
+  sessionSetThinking: "session/set-thinking",
+  sessionScratch: "session/scratch",
+  sessionOpenScratch: "session/open-scratch",
+
+  sessionRevisionsList: "session/revisions/list",
+  sessionRevisionsSave: "session/revisions/save",
+  sessionRevisionsActivate: "session/revisions/activate",
+  sessionRevisionsDelete: "session/revisions/delete",
+
+  sessionImportScan: "session/import-scan",
+  sessionImportRun: "session/import-run",
+  modelConfigImportScan: "model-config/import-scan",
+  modelConfigImportRun: "model-config/import-run",
+
+  // --- attachments ----------------------------------------------------------
+  attachmentAdd: "attachment/add",
+  attachmentRead: "attachment/read",
+  attachmentDelete: "attachment/delete",
+
+  // --- projects -------------------------------------------------------------
+  projectList: "project/list",
+  projectAdd: "project/add",
+  projectUpdate: "project/update",
+  projectRemove: "project/remove",
+  projectGroupList: "project-group/list",
+  projectGroupSet: "project-group/set",
+  projectGroupDelete: "project-group/delete",
+
+  // --- stats ----------------------------------------------------------------
+  statsUsage: "stats/usage",
+  statsRecordUsage: "stats/record-usage",
+
+  // --- settings -------------------------------------------------------------
+  settingsGet: "settings/get",
+  settingsSet: "settings/set",
+
+  // --- workspace ------------------------------------------------------------
+  fsIndex: "fs/index",
+
+  // --- commands -------------------------------------------------------------
+  commandList: "command/list",
 
   providerList: "provider/list",
   providerGet: "provider/get",
@@ -159,6 +202,8 @@ export type MethodName = (typeof Methods)[keyof typeof Methods];
 /** Server → client notifications. */
 export const Notifications = {
   permissionRequested: "permission/requested",
+  /** A per-session scratch directory was created/refreshed. */
+  scratchChanged: "session/scratch-changed",
 } as const;
 
 export type NotificationName = (typeof Notifications)[keyof typeof Notifications];

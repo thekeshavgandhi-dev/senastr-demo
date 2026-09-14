@@ -66,6 +66,7 @@ export class PluginService {
         description: manifest?.description,
         author: manifest?.author,
         tools: (manifest?.tools ?? []).map((t) => t.name),
+        commands: manifest?.commands,
         permissions: manifest?.permissions,
         enabled: meta.enabled !== false,
         installedAt: meta.installedAt,
@@ -120,6 +121,7 @@ export class PluginService {
       description: manifest.description,
       author: manifest.author,
       tools: (manifest.tools ?? []).map((t) => t.name),
+      commands: manifest.commands,
       permissions: manifest.permissions,
       enabled,
       installedAt,
@@ -228,6 +230,14 @@ export function validateManifest(m: PluginManifest): void {
   }
   if (typeof m.version !== "string" || !/^\d+\.\d+\.\d+/.test(m.version)) {
     invalid("manifest.version must look like semver (x.y.z)");
+  }
+  const commandNames = new Set<string>();
+  for (const command of m.commands ?? []) {
+    if (typeof command.name !== "string" || !/^[a-z0-9][a-z0-9:-]*$/i.test(command.name)) {
+      invalid("manifest.commands[].name must be a slash alias (letters, digits, ':' or '-')");
+    }
+    if (commandNames.has(command.name)) invalid(`duplicate plugin command: ${command.name}`);
+    commandNames.add(command.name);
   }
   const reserved = builtinToolNames();
   for (const tool of m.tools ?? []) {
