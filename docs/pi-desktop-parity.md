@@ -13,7 +13,8 @@ against the code in this repository — not against this repository's README.
 >
 > ```bash
 > pnpm typecheck                  # 3 packages + desktop, clean
-> pnpm test                       # 202 tests / 17 files, all pass
+> pnpm test                       # 202 tests / 17 files on the round-2 branch alone;
+>                                 # 352 tests / 23 files after merging with PRs #11/#12
 > node scripts/verify-parity.mjs  # 74 pass · 0 fail · 0 gaps
 > node scripts/demo.mjs           # 9/9 steps
 > node scripts/verify-packaging.mjs  # OK 7/7
@@ -355,7 +356,7 @@ Being explicit about the boundary of the evidence:
 pnpm install --frozen-lockfile
 pnpm build:packages
 pnpm typecheck                 # 3 packages + desktop, clean
-pnpm test                      # 202 tests / 17 files
+pnpm test                      # 352 tests / 23 files (incl. PRs #11/#12 suites)
 pnpm demo                      # 9 protocol-level steps
 node scripts/verify-parity.mjs # 74 checks against the real sidecar
 node scripts/verify-packaging.mjs
