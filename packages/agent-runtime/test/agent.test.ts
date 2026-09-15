@@ -348,7 +348,12 @@ describe("ask_user / plan mode / Task delegation", () => {
     // Steps are consumed in order across the parent turn and the nested run.
     const provider = new ScriptedProvider([
       [
-        { kind: "tool-call", id: "t1", name: "Task", arguments: { description: "explore", prompt: "look", subagent: "explorer" } },
+        {
+          kind: "tool-call",
+          id: "t1",
+          name: "Task",
+          arguments: { description: "explore", prompt: "locate the two entry files", subagent: "explorer" },
+        },
         { kind: "done" },
       ],
       [{ kind: "text", delta: "Found two files." }, { kind: "done" }],
@@ -404,7 +409,9 @@ describe("ask_user / plan mode / Task delegation", () => {
     expect(delegations[0].status).toBe("done");
     expect(delegations[1].status).toBe("done");
     const toolMessage = host.sessions.get("s1")!.messages.find((m) => m.role === "tool");
-    expect(toolMessage?.content).toContain("Batch Tasks Completed (2 parallel subagents)");
+    expect(toolMessage?.content).toContain("Batch complete");
+    expect(toolMessage?.content).toContain("Auth found in auth.ts");
+    expect(toolMessage?.content).toContain("All 12 tests passing.");
   });
 
   it("stopping a paused ask aborts the turn", async () => {

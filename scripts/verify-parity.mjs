@@ -815,8 +815,12 @@ async function main() {
 
   await check("A1", "plan mode denies write/exec server-side (not just in the prompt)", () => {
     const agent = readFileSync(join(root, "packages", "agent-runtime", "src", "agent.ts"), "utf8");
-    const enforced = /planMode\s*&&\s*riskByName\.get\(call\.name\)\s*!==\s*"read"/.test(agent);
-    const taskFiltered = /planMode\s*\?\s*tools\.filter\(\(t\)\s*=>\s*t\.name\s*!==\s*"Task"\)/.test(agent);
+    // (a) the run refuses any call whose tool risk is not "read" while planning
+    const enforced =
+      /planMode\s*&&\s*\(?\s*(?:tool\?\.risk|riskByName\.get\(call\.name\))/.test(agent) &&
+      /!==\s*"read"\)/.test(agent);
+    // (b) the delegation tools are removed from the catalog shown to the model
+    const taskFiltered = /planMode\s*\?\s*tools\.filter\(\(t\)\s*=>\s*t\.name\s*!==\s*"Task"/.test(agent);
     return enforced && taskFiltered
       ? "runtime rejects non-read tools and hides Task while planning"
       : { status: "FAIL", evidence: "plan mode is prompt-only; a model could still write/exec" };

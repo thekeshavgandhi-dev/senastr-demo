@@ -10,6 +10,10 @@ import type {
   GrantScope,
   McpServerInput,
   McpServerStatus,
+  MemoryEntry,
+  MemoryIndex,
+  MemoryScope,
+  MemorySearchHit,
   McpServerSummary,
   PermissionGrant,
   PermissionRequest,
@@ -127,6 +131,20 @@ export interface SenastrApi {
     get(params: { sessionId: string; snapshotId: string }): Promise<ReviewSnapshot>;
     rollback(params: { sessionId: string; snapshotId: string }): Promise<{ ok: boolean; output: string }>;
     purge(sessionId: string): Promise<{ ok: boolean }>;
+  };
+  memory: {
+    list(params?: { projectPath?: string | null; scope?: MemoryScope }): Promise<MemoryIndex[]>;
+    search(params: { query: string; projectPath?: string | null; limit?: number }): Promise<MemorySearchHit[]>;
+    read(params: { key: string; projectPath?: string | null; scope?: MemoryScope }): Promise<{ entry: MemoryEntry | null }>;
+    write(params: {
+      key: string;
+      content: string;
+      projectPath?: string | null;
+      scope?: MemoryScope;
+      mode?: "replace" | "append";
+      action?: "write" | "log";
+    }): Promise<{ entry: MemoryEntry; index: string }>;
+    forget(params: { key: string; projectPath?: string | null; scope?: MemoryScope }): Promise<{ removed: boolean }>;
   };
   projectCtx: {
     getContext(projectPath?: string | null): Promise<ProjectContext>;

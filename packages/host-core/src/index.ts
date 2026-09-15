@@ -9,6 +9,19 @@ export { SubagentService, type SubagentQuery } from "./subagents";
 export { ScheduledService, computeNextRun, nextCronRun, parseCron } from "./scheduled";
 export { ReviewStore } from "./review";
 export { InstructionService } from "./instructions";
+export { MemoryService, redact, scoreDocument } from "./memory";
+export {
+  discoverSkillFiles,
+  defaultSkillRoots,
+  listSkillResources,
+  parseFrontmatter,
+  readSkillDocument,
+  readSkillResource,
+  closest,
+  levenshtein,
+  type SkillRoot,
+} from "./skill-files";
+export { detectChecks, verifyProject, packageManager, type CheckStep, type CheckOutcome } from "./tools/verify";
 export { McpService, mcpToolName, MASKED_SECRET, type McpQuery } from "./mcp";
 export { registerMethods, type MethodContext } from "./methods";
 export { JsonFileStore } from "./store";

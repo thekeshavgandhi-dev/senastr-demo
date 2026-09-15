@@ -208,6 +208,21 @@ export interface PluginInfo {
  * only when their project path matches the current session. */
 export type CapabilityLevel = "global" | "project";
 
+/**
+ * Where a skill came from. Progressive disclosure treats all four the same
+ * way (metadata first, body on demand) but the UI only lets the user edit the
+ * `user` ones — file-backed skills are edited with an ordinary editor.
+ */
+export type SkillSource = "builtin" | "user" | "project-file" | "global-file";
+
+/** A bundled file inside a skill directory (`references/`, `scripts/`, …). */
+export interface SkillResource {
+  /** Path relative to the skill directory, always using `/` separators. */
+  path: string;
+  /** Bytes on disk; undefined for in-memory (user/builtin) skills. */
+  size?: number;
+}
+
 export interface SkillRecord {
   id: string;
   name: string;
@@ -219,6 +234,27 @@ export interface SkillRecord {
   projectPath?: string;
   createdAt: number;
   updatedAt: number;
+  /* --- progressive disclosure extensions (all optional, all additive) --- */
+  source?: SkillSource;
+  /** Absolute directory of a file-backed skill (SKILL.md lives inside it). */
+  dirPath?: string;
+  /** Absolute path of the SKILL.md this record was parsed from. */
+  filePath?: string;
+  /** `always: true` skills are injected in full on every turn, like standing
+   *  instructions. Everything else ships metadata only until requested. */
+  always?: boolean;
+  /** Extra free-text hints used for activation matching. */
+  triggers?: string[];
+  /** Tools this skill is expected to use (advisory; not enforced). */
+  allowedTools?: string[];
+  version?: string;
+  license?: string;
+  /** Bundled files discoverable via the `use_skill` tool. */
+  resources?: SkillResource[];
+  /** Raw frontmatter, preserved for round-tripping. */
+  frontmatter?: Record<string, string>;
+  /** Character size of `content`, used for context budgeting. */
+  size?: number;
 }
 
 export interface SkillInput {
@@ -229,6 +265,11 @@ export interface SkillInput {
   enabled?: boolean;
   level?: CapabilityLevel;
   projectPath?: string;
+  triggers?: string[];
+  allowedTools?: string[];
+  always?: boolean;
+  version?: string;
+  license?: string;
 }
 
 export type McpTransport = "stdio" | "http";
@@ -289,7 +330,12 @@ export interface Usage {
   outputTokens?: number;
 }
 
-export type TurnStopReason = "stop" | "max-steps" | "aborted" | "error" | "plan";
+/**
+ * Why a turn ended.
+ *  `stuck` — the runtime stopped it: the model repeated a failing call past
+ *  the retry threshold, so continuing would only burn the step budget.
+ */
+export type TurnStopReason = "stop" | "max-steps" | "aborted" | "error" | "plan" | "stuck";
 
 /** Events the agent runtime emits while a turn is running. Forwarded
  *  verbatim from main to the renderer as `senastr/event`. */
@@ -311,7 +357,10 @@ export type AgentEvent =
   | { type: "plan/proposed"; sessionId: string; proposal: PlanProposal }
   | { type: "plan/resolved"; sessionId: string; decision: "approved" | "rejected" }
   | { type: "subagent/start"; sessionId: string; delegation: DelegationSummary }
-  | { type: "subagent/end"; sessionId: string; delegation: DelegationSummary };
+  | { type: "subagent/end"; sessionId: string; delegation: DelegationSummary }
+  | { type: "todo/update"; sessionId: string; todos: TodoItem[] }
+  | { type: "skill/activated"; sessionId: string; skillId: string; skillName: string }
+  | { type: "memory/write"; sessionId: string; scope: MemoryScope; target: MemoryTarget; key: string };
 
 /** How the UI references the model for a turn. */
 export interface ModelRef {
@@ -488,6 +537,93 @@ export interface ProjectContext {
   instructions: string;
   memory: string;
   updatedAt: number;
+}
+
+/* ------------------------------------------------------------------ */
+/* Durable memory (the agent's long-term, cross-session store)         */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Memory lives on disk as plain Markdown, in two scopes:
+ *   `global`  — one store shared by every project
+ *   `project` — one store per project directory
+ */
+export type MemoryScope = "project" | "global";
+
+/**
+ * The kind of memory document.
+ *  - `index`      — MEMORY.md: the always-loaded table of contents
+ *  - `topic`      — a named note in `topics/<slug>.md`
+ *  - `log`        — the daily append-only work log
+ *  - `scratchpad` — short-lived notes for the work in flight
+ */
+export type MemoryTarget = "index" | "topic" | "log" | "scratchpad";
+
+export interface MemoryEntry {
+  /** Topic slug (kebab-case) or `YYYY-MM-DD` for log entries. */
+  key: string;
+  target: MemoryTarget;
+  scope: MemoryScope;
+  /** Markdown body (without the `## key` heading for topics). */
+  content: string;
+  /** First line of the document, kept in the index for recall. */
+  summary?: string;
+  updatedAt: number;
+  /** Approximate size in characters. */
+  size: number;
+}
+
+export interface MemorySearchHit {
+  key: string;
+  target: MemoryTarget;
+  scope: MemoryScope;
+  /** Best-matching excerpt around the query terms. */
+  excerpt: string;
+  /** Relevance score (higher is better). */
+  score: number;
+  updatedAt: number;
+}
+
+export interface MemoryIndex {
+  scope: MemoryScope;
+  /** Absolute directory backing this store. */
+  dir: string;
+  /** Raw MEMORY.md (may be empty on a fresh store). */
+  index: string;
+  entries: MemoryEntry[];
+  /** Total characters currently stored across all documents. */
+  size: number;
+}
+
+/** `memory` tool actions, mirrored by host-core `memory/*` methods. */
+export type MemoryAction = "read" | "write" | "search" | "list" | "log" | "forget";
+
+export interface MemoryQuery {
+  action: MemoryAction;
+  /** Topic slug (write/read/forget) or search query (search). */
+  key?: string;
+  content?: string;
+  /** Replace (default) or append to the target document. */
+  mode?: "replace" | "append";
+  /** Which store to use. Defaults to project, falling back to global. */
+  scope?: MemoryScope;
+  /** Max search hits (default 8). */
+  limit?: number;
+}
+
+/* ------------------------------------------------------------------ */
+/* Task tracking (the agent's working plan)                            */
+/* ------------------------------------------------------------------ */
+
+export type TodoStatus = "pending" | "in_progress" | "completed";
+
+export interface TodoItem {
+  /** Stable id assigned by the runtime (`t1`, `t2`, …). */
+  id: string;
+  content: string;
+  status: TodoStatus;
+  /** Optional free-form note (finding, blocker, file touched). */
+  notes?: string;
 }
 
 /* ------------------------------------------------------------------ */

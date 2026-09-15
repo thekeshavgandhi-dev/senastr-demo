@@ -67,6 +67,12 @@ export interface HostBridge {
   listSubagents?(projectPath?: string | null): Promise<SubagentRecord[]>;
   /** Standing instructions + memory. Null projectPath = global layer. */
   getProjectContext?(projectPath: string | null): Promise<ProjectContext>;
+  /**
+   * Durable memory for the system prompt: the memory index plus passages
+   * recalled for `query`, already rendered and size-capped by the host.
+   * Returns "" when there is nothing to recall.
+   */
+  memoryPrompt?(projectPath: string, query: string, limit?: number): Promise<string>;
   /** Resolve a model reference to a runnable spec (API keys included). */
   resolveModel?(ref: ModelRef): Promise<ModelSpec>;
   runTool(req: { sessionId: string; tool: string; args: Record<string, unknown> }): Promise<ToolResult>;
@@ -80,6 +86,20 @@ export interface AgentOptions {
   contextCharBudget?: number;
   /** Injectable provider factory (tests use this with a scripted provider). */
   providerFactory?: (spec: ModelSpec) => Provider;
+  /**
+   * Load a strongly-matching skill body automatically instead of waiting for
+   * an explicit `use_skill` call. Default true; it is the safety net for a
+   * model that forgets to activate a skill.
+   */
+  autoActivateSkills?: boolean;
+  /**
+   * Summarise compacted-away history with the model instead of dropping it
+   * behind a placeholder. Default true; costs one extra request per
+   * compaction, and falls back to the placeholder if it fails.
+   */
+  summarizeHistory?: boolean;
+  /** Max concurrent subagents inside one `batch_tasks` call. Default 4. */
+  maxDelegationConcurrency?: number;
 }
 
 export type { ChatMessage, ToolCall, ToolDefinition, ToolResult, Usage, Session };

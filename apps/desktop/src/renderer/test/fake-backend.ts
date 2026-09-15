@@ -546,6 +546,68 @@ export class FakeBackend implements SenastrApi {
     return full;
   }
 
+  /** In-memory durable memory store, mirroring host-core's layout. */
+  private readonly memoryStore = new Map<string, string>();
+
+  readonly memory = {
+    list: async (params?: { projectPath?: string | null; scope?: string }) => {
+      const scopes = params?.scope ? [params.scope] : ["project", "global"];
+      return scopes.map((scope) => ({
+        scope: scope as "project" | "global",
+        dir: `/fake/memory/${scope}`,
+        index: "",
+        entries: [...this.memoryStore.entries()].map(([key, content], i) => ({
+          key,
+          target: "topic" as const,
+          scope: scope as "project" | "global",
+          content,
+          summary: content.split("\n")[0] ?? "",
+          updatedAt: Date.now() + i,
+          size: content.length,
+        })),
+        size: 0,
+      }));
+    },
+    search: async (params: { query: string }) => {
+      const q = (params.query ?? "").toLowerCase();
+      return [...this.memoryStore.entries()]
+        .filter(([key, content]) => key.toLowerCase().includes(q) || content.toLowerCase().includes(q))
+        .map(([key, content]) => ({
+          key,
+          target: "topic" as const,
+          scope: "project" as const,
+          excerpt: content.slice(0, 120),
+          score: 1,
+          updatedAt: Date.now(),
+        }));
+    },
+    read: async (params: { key: string }) => {
+      const content = this.memoryStore.get(params.key);
+      return {
+        entry: content
+          ? { key: params.key, target: "topic" as const, scope: "project" as const, content, updatedAt: Date.now(), size: content.length }
+          : null,
+      };
+    },
+    write: async (params: { key: string; content: string; mode?: string }) => {
+      const previous = this.memoryStore.get(params.key) ?? "";
+      const next = params.mode === "append" && previous ? `${previous}\n${params.content}` : params.content;
+      this.memoryStore.set(params.key, next);
+      return {
+        entry: {
+          key: params.key,
+          target: "topic" as const,
+          scope: "project" as const,
+          content: next,
+          updatedAt: Date.now(),
+          size: next.length,
+        },
+        index: "",
+      };
+    },
+    forget: async (params: { key: string }) => ({ removed: this.memoryStore.delete(params.key) }),
+  };
+
   readonly projectCtx = {
     getContext: async (projectPath?: string | null) => {
       const key = projectPath?.trim() ? projectPath : "";
