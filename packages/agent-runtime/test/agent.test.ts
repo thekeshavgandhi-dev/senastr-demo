@@ -321,7 +321,7 @@ describe("ask_user / plan mode / Task delegation", () => {
     expect(proposal?.summary).toBe("Do the thing");
     expect(proposal?.steps).toEqual(["first", "second"]);
     expect(runtime.takePlanProposal("s1")).toBeNull();
-    // Task is hidden from the model in plan mode.
+    // Task and batch_tasks are hidden from the model in plan mode.
     expect(provider.lastParams?.tools?.some((t) => t.name === "Task")).toBe(false);
   });
 
@@ -348,7 +348,7 @@ describe("ask_user / plan mode / Task delegation", () => {
     // Steps are consumed in order across the parent turn and the nested run.
     const provider = new ScriptedProvider([
       [
-        { kind: "tool-call", id: "t1", name: "Task", arguments: { description: "explore", prompt: "look" } },
+        { kind: "tool-call", id: "t1", name: "Task", arguments: { description: "explore", prompt: "look", subagent: "explorer" } },
         { kind: "done" },
       ],
       [{ kind: "text", delta: "Found two files." }, { kind: "done" }],
@@ -363,10 +363,48 @@ describe("ask_user / plan mode / Task delegation", () => {
     expect(seen.indexOf("subagent/start")).toBeLessThan(seen.indexOf("subagent/end"));
     const delegations = runtime.listDelegations("s1");
     expect(delegations).toHaveLength(1);
+    expect(delegations[0].agentName).toBe("Explorer");
     expect(delegations[0].status).toBe("done");
     expect(delegations[0].report).toContain("Found two files.");
     const toolMessage = host.sessions.get("s1")!.messages.find((m) => m.role === "tool");
-    expect(toolMessage?.content).toContain("Subagent report");
+    expect(toolMessage?.content).toContain("Subagent report (Explorer)");
+  });
+
+  it("batch_tasks spawns parallel subagents and compiles reports", async () => {
+    const host = new FakeHost();
+    const provider = new ScriptedProvider([
+      [
+        {
+          kind: "tool-call",
+          id: "batch1",
+          name: "batch_tasks",
+          arguments: {
+            tasks: [
+              { description: "search auth", prompt: "locate auth handlers", subagent: "explorer" },
+              { description: "check tests", prompt: "audit test suite", subagent: "tester" },
+            ],
+          },
+        },
+        { kind: "done" },
+      ],
+      // Subagent 1 responses
+      [{ kind: "text", delta: "Auth found in auth.ts" }, { kind: "done" }],
+      // Subagent 2 responses
+      [{ kind: "text", delta: "All 12 tests passing." }, { kind: "done" }],
+      // Parent turn completion
+      [{ kind: "text", delta: "All subtasks completed." }, { kind: "done" }],
+    ]);
+    const runtime = new AgentRuntime(host, { providerFactory: () => provider });
+    const seen: string[] = [];
+    for await (const e of runtime.runTurn({ sessionId: "s1", userMessage: "run parallel tasks", model })) {
+      seen.push((e as { type: string }).type);
+    }
+    const delegations = runtime.listDelegations("s1");
+    expect(delegations).toHaveLength(2);
+    expect(delegations[0].status).toBe("done");
+    expect(delegations[1].status).toBe("done");
+    const toolMessage = host.sessions.get("s1")!.messages.find((m) => m.role === "tool");
+    expect(toolMessage?.content).toContain("Batch Tasks Completed (2 parallel subagents)");
   });
 
   it("stopping a paused ask aborts the turn", async () => {

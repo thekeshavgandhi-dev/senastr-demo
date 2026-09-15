@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
+  BUILTIN_SKILLS,
+  BUILTIN_SUBAGENTS,
   type AgentEvent,
   type AskAnswers,
   type AskQuestion,
@@ -45,7 +47,7 @@ interface PendingAsk {
 export const PLAN_MODE_PROMPT = [
   "",
   "PLAN MODE: you are planning, not executing.",
-  "- Investigate with read-only tools (read_file, glob, grep, list_dir).",
+  "- Investigate with read-only tools (read_file, glob, grep, code_intel, list_dir, web_fetch).",
   "- Do NOT write files, run commands, or spawn subagents; those calls will be rejected.",
   "- You may call ask_user when a decision blocks the plan.",
   "- When the plan is complete, call submit_plan exactly once with the full plan.",
@@ -55,21 +57,11 @@ export const PLAN_MODE_PROMPT = [
 /**
  * The senastr agent loop.
  *
- * One turn:
- *   user message → (model → tool calls → results)* → final answer
- *
- * The runtime never touches disk or the network directly for project work:
- * model I/O goes through the provider (with the API key resolved by the
- * caller), everything else goes through the HostBridge, which enforces
- * project confinement and the permission layer.
- *
- * Three tools are intercepted here instead of reaching the host:
- *   ask_user    — pauses the turn until the user answers (resolveAsk)
- *   submit_plan — ends a plan-mode turn with a proposal awaiting approval
- *   Task        — runs a nested delegated loop and returns its report
- *
- * All transcript writes happen here (single writer per session), so the
- * host store and the UI can stay in lockstep by re-reading after a turn.
+ * Combines:
+ *  - Claude Code CLI primitives (reading, patching, shell execution, context economy, plan/build modes)
+ *  - Hermes Agent function calling & multi-turn reasoning with auto-correction
+ *  - Arena AI Multi-Agent Orchestra (specialist subagent delegation & parallel batch execution)
+ *  - Comprehensive engineering skills library
  */
 export class AgentRuntime {
   private active = new Map<string, AbortController>();
@@ -116,12 +108,13 @@ export class AgentRuntime {
         const tools = await this.host.listTools(session.id);
         const riskByName = new Map(tools.map((t) => [t.name, t.risk]));
         const history = (await this.host.getSession(session.id)).messages;
-        // The transcript on disk is the durable record; the model only ever
-        // sees a bounded window so long sessions cannot overflow the context.
         compaction = compactHistory(history, this.opts.contextCharBudget);
-        const skills = this.host.listSkills ? await this.host.listSkills(session.projectPath) : [];
+
+        const userSkills = this.host.listSkills ? await this.host.listSkills(session.projectPath) : [];
+        const activeSkills = userSkills.length > 0 ? userSkills : BUILTIN_SKILLS;
         const contexts = await this.loadProjectContexts(session.projectPath);
-        let system = withActiveSkills(defaultSystemPrompt(session.projectPath!), skills);
+
+        let system = withActiveSkills(defaultSystemPrompt(session.projectPath!), activeSkills);
         system = withProjectContext(system, contexts);
         if (planMode) system += PLAN_MODE_PROMPT;
 
@@ -132,7 +125,7 @@ export class AgentRuntime {
           model: params.model.model,
           system,
           messages: compaction.messages,
-          tools: planMode ? tools.filter((t) => t.name !== "Task") : tools,
+          tools: planMode ? tools.filter((t) => t.name !== "Task" && t.name !== "batch_tasks") : tools,
           signal: abort.signal,
         })) {
           if (evt.kind === "text") {
@@ -162,8 +155,6 @@ export class AgentRuntime {
 
           // --- runtime-intercepted tools ------------------------------------
           if (call.name === "ask_user") {
-            // Streamed live: ask/request must reach the UI while the turn
-            // is still paused (it only resumes via resolveAsk).
             const outcome = yield* this.runAsk(session.id, call, abort.signal);
             if (outcome.aborted) {
               stopReason = "aborted";
@@ -173,6 +164,7 @@ export class AgentRuntime {
             await this.host.appendMessages(session.id, [toolMessage(call, outcome.result)]);
             continue;
           }
+
           if (call.name === "submit_plan") {
             const result = this.handleSubmitPlan(session.id, call, planMode);
             yield { type: "tool/result", callId: call.id, ok: result.ok, result: result.result };
@@ -184,15 +176,22 @@ export class AgentRuntime {
             }
             break;
           }
+
           if (call.name === "Task") {
             const outcome = yield* this.runTask(session.id, call, params.model, abort.signal);
             yield { type: "tool/result", callId: call.id, ok: outcome.result.ok, result: outcome.result };
             await this.host.appendMessages(session.id, [toolMessage(call, outcome.result)]);
             continue;
           }
+
+          if (call.name === "batch_tasks") {
+            const outcome = yield* this.runBatchTasks(session.id, call, params.model, abort.signal);
+            yield { type: "tool/result", callId: call.id, ok: outcome.result.ok, result: outcome.result };
+            await this.host.appendMessages(session.id, [toolMessage(call, outcome.result)]);
+            continue;
+          }
+
           if (planMode && riskByName.get(call.name) !== "read") {
-            // Read-only enforcement is deterministic: the model is told, and
-            // the call is rejected here even if it tries anyway.
             const blocked: ToolResult = {
               ok: false,
               error:
@@ -255,29 +254,50 @@ export class AgentRuntime {
   /* ask_user                                                             */
   /* ------------------------------------------------------------------ */
 
-  /**
-   * Async-generator form: yields ask/request immediately so the UI can show
-   * the dialog while the turn is paused, then resolves to the tool outcome.
-   */
+  pendingAsksFor(sessionId: string): AskRequest[] {
+    const pending = this.pendingAsks.get(sessionId);
+    return pending ? [{ ...pending.request }] : [];
+  }
+
+  resolveAsk(requestId: string, answers: AskAnswers): boolean {
+    for (const [sessionId, pending] of this.pendingAsks.entries()) {
+      if (pending.request.requestId === requestId) {
+        this.pendingAsks.delete(sessionId);
+        pending.resolve(answers);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private failSessionAsks(sessionId: string): void {
+    const pending = this.pendingAsks.get(sessionId);
+    if (pending) {
+      this.pendingAsks.delete(sessionId);
+      pending.resolve(ASK_ABORTED);
+    }
+  }
+
   private async *runAsk(
     sessionId: string,
     call: ToolCall,
     signal: AbortSignal,
-  ): AsyncGenerator<AgentEvent, { result: ToolResult; aborted: boolean }> {
+  ): AsyncGenerator<AgentEvent, { aborted: boolean; result: ToolResult }> {
     const started = Date.now();
-    const fail = (error: string) => ({
-      result: { ok: false, error, durationMs: Date.now() - started } as ToolResult,
-      aborted: false,
-    });
     let questions: AskQuestion[];
     try {
       questions = normalizeQuestions(call.arguments);
     } catch (err) {
-      return fail(err instanceof Error ? err.message : String(err));
+      return {
+        aborted: false,
+        result: {
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+          durationMs: Date.now() - started,
+        },
+      };
     }
-    if (signal.aborted) {
-      return { result: { ok: false, error: "stopped by user", durationMs: 0 }, aborted: true };
-    }
+
     const request: AskRequest = {
       requestId: randomUUID(),
       sessionId,
@@ -285,91 +305,91 @@ export class AgentRuntime {
       questions,
       createdAt: Date.now(),
     };
-    yield { type: "ask/request", request };
-    const answers = await new Promise<AskAnswers | typeof ASK_ABORTED>((resolve) => {
-      this.pendingAsks.set(request.requestId, { request, resolve });
+
+    const answerPromise = new Promise<AskAnswers | typeof ASK_ABORTED>((resolve) => {
+      this.pendingAsks.set(sessionId, { request, resolve });
     });
-    this.pendingAsks.delete(request.requestId);
+
+    yield { type: "ask/request", request };
+
+    const onAbort = () => this.resolveAsk(request.requestId, ASK_ABORTED as unknown as AskAnswers);
+    signal.addEventListener("abort", onAbort, { once: true });
+
+    const answers = await answerPromise;
+    signal.removeEventListener("abort", onAbort);
+
     if (answers === ASK_ABORTED || signal.aborted) {
       return {
-        result: { ok: false, error: "stopped by user", durationMs: Date.now() - started },
         aborted: true,
+        result: { ok: false, error: "aborted while waiting for user answer", durationMs: Date.now() - started },
       };
     }
+
     yield { type: "ask/resolved", requestId: request.requestId, sessionId };
+
     const lines = questions.map((q, i) => {
-      const answer = answers[i];
-      const label = q.header || `Question ${i + 1}`;
-      if (answer == null) return `${label}: (skipped)`;
-      if (answer.length === 0) return `${label}: (no answer)`;
-      return `${label}: ${answer.join("; ")}`;
+      const ans = answers[i];
+      const rendered = !ans || ans.length === 0 ? "(no answer)" : ans.join(", ");
+      return `${q.header ?? q.question}: ${rendered}`;
     });
     return {
-      result: { ok: true, output: `User answers:\n${lines.join("\n")}`, durationMs: Date.now() - started },
       aborted: false,
+      result: {
+        ok: true,
+        output: `User answered:\n${lines.join("\n")}`,
+        durationMs: Date.now() - started,
+      },
     };
-  }
-
-  /**
-   * Resolve a waiting ask_user call. Returns false when the request id is
-   * unknown (already resolved, or the turn ended).
-   */
-  resolveAsk(requestId: string, answers: AskAnswers): boolean {
-    const pending = this.pendingAsks.get(requestId);
-    if (!pending) return false;
-    this.pendingAsks.delete(requestId);
-    const normalized: AskAnswers = pending.request.questions.map((_, i) => {
-      const entry = answers[i];
-      if (entry == null) return null;
-      return Array.isArray(entry) ? entry.map(String).slice(0, MAX_ASK_OPTIONS + 1) : [String(entry)];
-    });
-    pending.resolve(normalized);
-    return true;
-  }
-
-  pendingAsksFor(sessionId: string): AskRequest[] {
-    return [...this.pendingAsks.values()]
-      .filter((p) => p.request.sessionId === sessionId)
-      .map((p) => p.request);
-  }
-
-  private failSessionAsks(sessionId: string): void {
-    for (const [id, pending] of this.pendingAsks) {
-      if (pending.request.sessionId === sessionId) {
-        this.pendingAsks.delete(id);
-        pending.resolve(ASK_ABORTED);
-      }
-    }
   }
 
   /* ------------------------------------------------------------------ */
   /* submit_plan                                                          */
   /* ------------------------------------------------------------------ */
 
+  takePlanProposal(sessionId: string): PlanProposal | null {
+    const p = this.pendingProposals.get(sessionId);
+    if (!p) return null;
+    this.pendingProposals.delete(sessionId);
+    return p;
+  }
+
   private handleSubmitPlan(
     sessionId: string,
     call: ToolCall,
     planMode: boolean,
-  ): { ok: boolean; result: ToolResult; proposed: PlanProposal | null } {
-    const fail = (error: string) => ({
-      ok: false,
-      result: { ok: false, error, durationMs: 0 } as ToolResult,
-      proposed: null as PlanProposal | null,
-    });
-    if (!planMode) return fail("submit_plan is only available in plan mode.");
-    const args = call.arguments ?? {};
-    const summary = typeof args.summary === "string" ? args.summary.trim() : "";
-    const steps = Array.isArray(args.steps)
-      ? args.steps.filter((s): s is string => typeof s === "string" && s.trim().length > 0).slice(0, 50)
+  ): { ok: boolean; result: ToolResult; proposed?: PlanProposal } {
+    const started = Date.now();
+    if (!planMode) {
+      return {
+        ok: false,
+        result: {
+          ok: false,
+          error: "submit_plan is only available in plan mode — switch modes in the top bar to plan changes.",
+          durationMs: 0,
+        },
+      };
+    }
+    const args = call.arguments as Record<string, unknown>;
+    const summary = typeof args?.summary === "string" ? args.summary.trim() : "";
+    const steps = Array.isArray(args?.steps)
+      ? args.steps.filter((s): s is string => typeof s === "string" && s.trim().length > 0)
       : [];
-    if (!summary) return fail("submit_plan requires a non-empty summary.");
-    if (steps.length === 0) return fail("submit_plan requires at least one step.");
-    const risks = typeof args.risks === "string" && args.risks.trim() ? args.risks.trim().slice(0, 4000) : undefined;
-    const proposed: PlanProposal = {
+    const risks = typeof args?.risks === "string" ? args.risks.trim() : undefined;
+    if (!summary || steps.length === 0) {
+      return {
+        ok: false,
+        result: {
+          ok: false,
+          error: "submit_plan requires a non-empty summary and at least one step.",
+          durationMs: Date.now() - started,
+        },
+      };
+    }
+    const proposal: PlanProposal = {
       sessionId,
       toolCallId: call.id,
-      summary: summary.slice(0, 4000),
-      steps: steps.map((s) => s.slice(0, 1000)),
+      summary,
+      steps,
       risks,
       createdAt: Date.now(),
     };
@@ -377,28 +397,17 @@ export class AgentRuntime {
       ok: true,
       result: {
         ok: true,
-        output: "Plan submitted. The turn is now paused — wait for the user to approve, reject, or request revisions.",
-        durationMs: 0,
+        output: `Plan submitted for user approval:\n\nSummary: ${summary}\n\nSteps:\n${steps.map((s, i) => `${i + 1}. ${s}`).join("\n")}${risks ? `\n\nRisks / notes:\n${risks}` : ""}`,
+        durationMs: Date.now() - started,
       },
-      proposed,
+      proposed: proposal,
     };
   }
 
-  /** Take (and clear) the proposal awaiting approval for a session. */
-  takePlanProposal(sessionId: string): PlanProposal | null {
-    const proposal = this.pendingProposals.get(sessionId) ?? null;
-    if (proposal) this.pendingProposals.delete(sessionId);
-    return proposal;
-  }
-
   /* ------------------------------------------------------------------ */
-  /* Task (subagents)                                                     */
+  /* Task & Batch Subagent Delegation (Arena AI Multi-Agent Orchestra)  */
   /* ------------------------------------------------------------------ */
 
-  /**
-   * Async-generator form: yields subagent/start as soon as the delegation is
-   * registered so the UI shows live progress, then the final tool outcome.
-   */
   private async *runTask(
     sessionId: string,
     call: ToolCall,
@@ -406,26 +415,25 @@ export class AgentRuntime {
     parentSignal: AbortSignal,
   ): AsyncGenerator<AgentEvent, { result: ToolResult }> {
     const started = Date.now();
+    const args = (call.arguments ?? {}) as Record<string, unknown>;
+    const description = typeof args.description === "string" ? args.description.trim() : "";
+    const prompt = typeof args.prompt === "string" ? args.prompt.trim() : "";
     const fail = (error: string): { result: ToolResult } => ({
       result: { ok: false, error, durationMs: Date.now() - started },
     });
-    const args = call.arguments ?? {};
-    const description = typeof args.description === "string" ? args.description.trim().slice(0, 120) : "";
-    const prompt = typeof args.prompt === "string" ? args.prompt.trim() : "";
-    if (!description) return fail("Task requires a short description.");
-    if (!prompt) return fail("Task requires a prompt.");
-    if (prompt.length > 24_000) return fail("Task prompt exceeds 24000 characters.");
+    if (!description) return fail("Task.description is required");
+    if (!prompt) return fail("Task.prompt is required");
 
     const session = await this.host.getSession(sessionId);
-    const projectPath = session.projectPath;
-    if (!projectPath) return fail("session has no project set");
-
-    // Resolve the named personality, if any.
+    const projectPath = session.projectPath!;
+    const wanted = (typeof args.subagent === "string" ? args.subagent.trim() : "").toLowerCase();
     let def: SubagentRecord | undefined;
-    const wanted = typeof args.subagent === "string" ? args.subagent.trim().toLowerCase() : "";
-    if (wanted && this.host.listSubagents) {
-      const all = await this.host.listSubagents(projectPath);
-      def = all.find((d) => d.name.toLowerCase() === wanted || d.id === wanted);
+    if (wanted) {
+      const userSubagents = this.host.listSubagents ? await this.host.listSubagents(projectPath) : [];
+      def = userSubagents.find((d) => d.name.toLowerCase() === wanted || d.id === wanted);
+      if (!def) {
+        def = BUILTIN_SUBAGENTS.find((d) => d.name.toLowerCase() === wanted || d.id === wanted);
+      }
       if (!def) return fail(`unknown subagent: ${args.subagent}`);
     }
     let model = parentModel;
@@ -451,7 +459,7 @@ export class AgentRuntime {
 
     try {
       const tools = (await this.host.listTools(sessionId)).filter(
-        (t) => t.name !== "Task" && t.name !== "ask_user" && t.name !== "submit_plan",
+        (t) => t.name !== "Task" && t.name !== "batch_tasks" && t.name !== "ask_user" && t.name !== "submit_plan",
       );
       const outcome = await this.runDelegation({
         sessionId,
@@ -488,6 +496,144 @@ export class AgentRuntime {
     }
   }
 
+  private async *runBatchTasks(
+    sessionId: string,
+    call: ToolCall,
+    parentModel: ModelSpec,
+    parentSignal: AbortSignal,
+  ): AsyncGenerator<AgentEvent, { result: ToolResult }> {
+    const started = Date.now();
+    const args = (call.arguments ?? {}) as Record<string, unknown>;
+    const rawTasks = args.tasks;
+    if (!Array.isArray(rawTasks) || rawTasks.length === 0) {
+      return {
+        result: {
+          ok: false,
+          error: "batch_tasks requires a non-empty tasks array",
+          durationMs: Date.now() - started,
+        },
+      };
+    }
+
+    const tasks = rawTasks
+      .slice(0, 6)
+      .map((t: any, idx) => ({
+        description: typeof t?.description === "string" && t.description.trim() ? t.description.trim() : `task-${idx + 1}`,
+        prompt: typeof t?.prompt === "string" ? t.prompt.trim() : "",
+        subagent: typeof t?.subagent === "string" ? t.subagent.trim() : undefined,
+      }))
+      .filter((t) => Boolean(t.prompt));
+
+    if (tasks.length === 0) {
+      return {
+        result: {
+          ok: false,
+          error: "batch_tasks: all task items had empty prompts",
+          durationMs: Date.now() - started,
+        },
+      };
+    }
+
+    const session = await this.host.getSession(sessionId);
+    const projectPath = session.projectPath!;
+    const userSubagents = this.host.listSubagents ? await this.host.listSubagents(projectPath) : [];
+    const allSubagents = [
+      ...userSubagents,
+      ...BUILTIN_SUBAGENTS.filter((b) => !userSubagents.some((u) => u.id === b.id || u.name.toLowerCase() === b.name.toLowerCase())),
+    ];
+
+    const availableTools = (await this.host.listTools(sessionId)).filter(
+      (t) => t.name !== "Task" && t.name !== "batch_tasks" && t.name !== "ask_user" && t.name !== "submit_plan",
+    );
+
+    const taskPlans = await Promise.all(
+      tasks.map(async (task) => {
+        const wanted = (task.subagent ?? "").toLowerCase();
+        let def = wanted ? allSubagents.find((d) => d.name.toLowerCase() === wanted || d.id === wanted) : undefined;
+        let model = parentModel;
+        if (def?.model && this.host.resolveModel) {
+          try {
+            model = await this.host.resolveModel(def.model);
+          } catch {
+            model = parentModel;
+          }
+        }
+        const delegationId = randomUUID();
+        const record: DelegationSummary = {
+          id: delegationId,
+          sessionId,
+          agentName: def?.name ?? "default",
+          description: task.description,
+          status: "running",
+          startedAt: Date.now(),
+        };
+        return { task, def, model, record };
+      }),
+    );
+
+    for (const item of taskPlans) {
+      this.storeDelegation(sessionId, item.record);
+      yield { type: "subagent/start", sessionId, delegation: { ...item.record } };
+    }
+
+    const outcomes = await Promise.all(
+      taskPlans.map(async (item) => {
+        try {
+          const outcome = await this.runDelegation({
+            sessionId,
+            prompt: item.task.prompt,
+            projectPath,
+            tools: availableTools,
+            model: item.model,
+            systemExtra: item.def?.systemPrompt,
+            parentSignal,
+          });
+          item.record.status = outcome.status;
+          item.record.completedAt = Date.now();
+          item.record.turns = outcome.turns;
+          item.record.usage = outcome.usage;
+          item.record.report = outcome.report;
+          item.record.error = outcome.error;
+          this.storeDelegation(sessionId, item.record);
+          return { item, outcome };
+        } catch (err) {
+          item.record.status = parentSignal.aborted ? "stopped" : "error";
+          item.record.completedAt = Date.now();
+          item.record.error = err instanceof Error ? err.message : String(err);
+          this.storeDelegation(sessionId, item.record);
+          return {
+            item,
+            outcome: {
+              status: item.record.status,
+              report: "",
+              turns: 0,
+              usage: {},
+              error: item.record.error,
+            },
+          };
+        }
+      }),
+    );
+
+    for (const { item } of outcomes) {
+      yield { type: "subagent/end", sessionId, delegation: { ...item.record } };
+    }
+
+    const reports = outcomes.map(
+      ({ item, outcome }, idx) =>
+        `### Task ${idx + 1}: ${item.record.description} (${item.record.agentName}) [${outcome.status}]\n${outcome.report || outcome.error || "(no output)"}`,
+    );
+
+    const allOk = outcomes.every((r) => r.outcome.status === "done");
+    return {
+      result: {
+        ok: allOk,
+        output: `Batch Tasks Completed (${outcomes.length} parallel subagents):\n\n${reports.join("\n\n")}`,
+        durationMs: Date.now() - started,
+      },
+    };
+  }
+
   private async runDelegation(opts: {
     sessionId: string;
     prompt: string;
@@ -499,10 +645,10 @@ export class AgentRuntime {
   }): Promise<{ status: DelegationStatus; report: string; turns: number; usage: Usage; error?: string }> {
     const provider = this.makeProvider(opts.model);
     const system = [
-      `You are a senastr subagent working on one self-contained task inside the project: ${opts.projectPath}`,
-      "Rules: stay within the task, use tools to inspect and (when asked) modify the project, then report back concisely.",
-      "You cannot ask the user questions — make reasonable assumptions and note them.",
-      opts.systemExtra ? `\nPersonality:\n${opts.systemExtra}` : "",
+      `You are a specialized senastr subagent working on a focused task inside the project: ${opts.projectPath}`,
+      "Rules: stay within your assigned scope, use tools to inspect and modify project files, verify your changes, and report back concisely.",
+      "You cannot ask the user questions — make reasonable assumptions and note them in your final report.",
+      opts.systemExtra ? `\nRole & Personality:\n${opts.systemExtra}` : "",
     ]
       .filter(Boolean)
       .join("\n");

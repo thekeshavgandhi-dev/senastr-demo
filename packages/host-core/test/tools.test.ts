@@ -12,6 +12,9 @@ import {
   readFileTool,
   writeFileTool,
 } from "../src/tools/fs";
+import { patchFileTool } from "../src/tools/patch";
+import { codeIntelTool } from "../src/tools/intel";
+import { webFetchTool } from "../src/tools/fetch";
 
 /** Fresh project fixture: src/app.ts, src/util.ts, docs/readme.md, noise. */
 function makeProject(): string {
@@ -85,7 +88,6 @@ describe("grep", () => {
   it("supports regular expressions and literal fallback", () => {
     const project = makeProject();
     expect(grepTool(project, { pattern: "export (const|function)" })).toContain("src/util.ts");
-    // Unbalanced parenthesis is not a valid regex — treated as a literal search.
     expect(grepTool(project, { pattern: "add(a" })).toContain("src/util.ts:1:");
     expect(grepTool(project, { pattern: "add(a" })).toContain("— 1 match");
   });
@@ -109,6 +111,123 @@ describe("grep", () => {
   it("refuses to escape the project root", () => {
     const project = makeProject();
     expect(() => grepTool(project, { pattern: "root", path: "../../" })).toThrow(RpcError);
+  });
+});
+
+describe("patch_file", () => {
+  it("performs exact search and replace in a file", () => {
+    const project = makeProject();
+    const out = patchFileTool(project, {
+      path: "src/app.ts",
+      old_text: "console.log(app);",
+      new_text: "console.log(app, 'patched');",
+    });
+    expect(out).toContain("patched src/app.ts");
+    expect(readFileSync(join(project, "src", "app.ts"), "utf8")).toBe(
+      "export const app = 1;\nconsole.log(app, 'patched');\n",
+    );
+  });
+
+  it("performs fuzzy whitespace/indentation matching when exact match fails", () => {
+    const project = makeProject();
+    const out = patchFileTool(project, {
+      path: "src/util.ts",
+      old_text: "export function add(a, b) {\n    return a + b;\n}",
+      new_text: "export function add(a: number, b: number): number {\n  return a + b;\n}",
+    });
+    expect(out).toContain("patched src/util.ts");
+    expect(readFileSync(join(project, "src", "util.ts"), "utf8")).toContain("a: number, b: number");
+  });
+
+  it("rejects when multiple occurrences exist without expected_occurrences parameter", () => {
+    const project = makeProject();
+    writeFileSync(join(project, "multi.txt"), "hello\nhello\nhello\n");
+    expect(() =>
+      patchFileTool(project, {
+        path: "multi.txt",
+        old_text: "hello",
+        new_text: "world",
+      }),
+    ).toThrow(/found 3 occurrences/);
+  });
+
+  it("replaces multiple occurrences when expected_occurrences is specified", () => {
+    const project = makeProject();
+    writeFileSync(join(project, "multi.txt"), "hello\nhello\nhello\n");
+    const out = patchFileTool(project, {
+      path: "multi.txt",
+      old_text: "hello",
+      new_text: "world",
+      expected_occurrences: 3,
+    });
+    expect(out).toContain("replaced 3 occurrence(s)");
+    expect(readFileSync(join(project, "multi.txt"), "utf8")).toBe("world\nworld\nworld\n");
+  });
+
+  it("throws helpful error when old_text is not found", () => {
+    const project = makeProject();
+    expect(() =>
+      patchFileTool(project, {
+        path: "src/app.ts",
+        old_text: "nonexistent_code_snippet()",
+        new_text: "something()",
+      }),
+    ).toThrow(/could not find old_text/);
+  });
+
+  it("refuses to patch files outside project", () => {
+    const project = makeProject();
+    expect(() =>
+      patchFileTool(project, {
+        path: "../outside.txt",
+        old_text: "a",
+        new_text: "b",
+      }),
+    ).toThrow(RpcError);
+  });
+});
+
+describe("code_intel", () => {
+  it("locates functions, classes, and exported symbols", () => {
+    const project = makeProject();
+    const out = codeIntelTool(project, { query: "add" });
+    expect(out).toContain("src/util.ts:1 [function] add");
+    expect(out).toContain("export function add");
+  });
+
+  it("filters by symbol kind", () => {
+    const project = makeProject();
+    writeFileSync(join(project, "src", "types.ts"), "export interface UserConfig {\n  name: string;\n}\nexport type Id = string;\n");
+    const out = codeIntelTool(project, { query: "UserConfig", kind: "interface" });
+    expect(out).toContain("src/types.ts:1 [interface] UserConfig");
+  });
+
+  it("reports when no symbols match query", () => {
+    const project = makeProject();
+    const out = codeIntelTool(project, { query: "nonexistentSymbolXYZ" });
+    expect(out).toContain("no symbol definitions found");
+  });
+});
+
+describe("web_fetch", () => {
+  it("rejects non-http/https protocols", async () => {
+    await expect(webFetchTool({ url: "ftp://example.com/file" })).rejects.toThrow(/only HTTP and HTTPS/);
+    await expect(webFetchTool({ url: "file:///etc/passwd" })).rejects.toThrow(/only HTTP and HTTPS/);
+  });
+
+  it("rejects empty or invalid URLs", async () => {
+    await expect(webFetchTool({ url: "" })).rejects.toThrow(/url is required/);
+    await expect(webFetchTool({ url: "not-a-url" })).rejects.toThrow(/invalid URL/);
+  });
+});
+
+describe("read_file line slicing", () => {
+  it("slices files by start_line and end_line with line numbers", () => {
+    const project = makeProject();
+    const out = readFileTool(project, { path: "src/app.ts", start_line: 1, end_line: 1 });
+    expect(out).toContain("lines 1-1 of 2");
+    expect(out).toContain("1 | export const app = 1;");
+    expect(out).not.toContain("console.log");
   });
 });
 
