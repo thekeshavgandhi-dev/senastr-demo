@@ -4,7 +4,41 @@
 present on `main` when this audit ran).
 **Scope:** every user-visible and contract-level feature area of the reference, checked
 against the code in this repository — not against this repository's README.
-**Date:** 2026-09-14 · **Branch:** `arena/01a09d8e-senastr-demo`.
+**Date:** 2026-09-14, updated **2026-09-15** · **Branches:** `arena/01a09d8e-senastr-demo`, `arena/01a0a015-senastr-demo`.
+
+> ### Update — 2026-09-15 (round 2)
+>
+> All six gaps in §5 and the "Missing" verdicts in §2/§3 (areas 10, 11, 18, 19, 20) are now
+> **implemented and covered by tests**. New evidence:
+>
+> ```bash
+> pnpm typecheck                  # 3 packages + desktop, clean
+> pnpm test                       # 202 tests / 17 files on the round-2 branch alone;
+>                                 # 352 tests / 23 files after merging with PRs #11/#12
+> node scripts/verify-parity.mjs  # 74 pass · 0 fail · 0 gaps
+> node scripts/demo.mjs           # 9/9 steps
+> node scripts/verify-packaging.mjs  # OK 7/7
+> ```
+>
+> What landed (each with a test or a harness check):
+>
+> | Area | Now in senastr |
+> | --- | --- |
+> | Reasoning / thinking level | `packages/shared/src/thinking-levels.ts` (`off…xhigh`, clamping), per-model `supportedThinkingLevels`/`defaultThinkingLevel`, `assistant/reasoning` events, provider wiring for OpenAI (`reasoning_effort`), Anthropic (thinking budget, temperature suppressed), Gemini (`thinkingConfig`, `thought: true`), Responses (summaries); composer reasoning menu + `session/set-thinking`. |
+> | Image attachments | `packages/host-core/src/attachments.ts` (12 MB image cap, `.bin`+`.json` sidecar, host-only reads), `attachment/*` methods, `hydrateAttachments()` in the runtime (OpenAI `image_url`, Anthropic base64, Gemini `inlineData`), composer picker/paste chips with thumbnails, transcript thumbnails. |
+> | In-app updates | `apps/desktop/src/main/updates.ts` (`UpdatesService`, `electron-updater`), `SENASTR_UPDATE_REPO`/`_FEED`, `updates/state` event, Settings → Updates page with channel + auto-check, release-URL fallback when no signed feed is configured. |
+> | i18n | `renderer/lib/i18n.ts` with `en` + `zh-CN` catalogues, translator wired through the shell, language switcher persisted to host settings (`settings/set`). |
+> | Command palette / `/` / `@` | `renderer/components/CommandPalette.tsx` (commands from `command/list` + project files, `executeCommand`), `command/shells` catalog, builtin slash commands (`/new`, `/compact`, `/agent-mode`, `/plan-mode`, `/goal-mode`, …), shared `composer-trigger.ts` (`detectTrigger`, `applyCompletion`, `rankFileCandidates`, ideographic-comma rewrite), `fs/index` file index, `chat/compact` + `session/replace-messages`. |
+> | Session import | `packages/host-core/src/importers.ts` for Claude Code, Codex, OpenCode and Pi, `session/import-scan` + `session/import-run`, Settings → Import page. |
+> | Also added in this round | Projects + project groups (`projects.ts`, `project/*`, sidebar menus), token usage history (`stats.ts`, `stats/usage`, Settings → Usage), network proxy for models/MCP/child processes (`network-proxy.ts`, Settings → Network, ADR-0177-style bypass list), session revisions (`revisions.ts`), scratch workspace (`scratch.ts`), model-config import (`model-config/import-scan|import-run`), per-model context/output/temperature configuration, and provider summaries that expose those configs. |
+>
+> Still **not** implemented (tracked as the round-3 backlog, all UI/plugin surface rather than
+> agent contract): the plugin marketplace, plugin-contributed work-panel views/themes/launcher
+> and the resident-service + inter-plugin messaging runtime, the bundled `pi.browser` host,
+> filesystem reveal/open IPC, the scratch and marketplace settings pages, pending-plan
+> resolution surfaces, project memory/clone, host-side `pulls`, onboarding/system-fonts/feedback
+> IPC, and native window controls. The 6-item list in §5 is therefore **historical**: it
+> records what round 1 found, not the current state.
 
 ---
 
@@ -278,7 +312,10 @@ harness, not the product.
 
 ---
 
-## 5. What is still missing (6 items)
+## 5. What round 1 found missing (6 items) — all since implemented, see the update at the top
+
+> Historical record. These six items were the state on 2026-09-14; each is now implemented and
+> covered by `pnpm test` and/or `scripts/verify-parity.mjs`.
 
 | Gap | Reference behaviour | Work required |
 | --- | --- | --- |
@@ -319,9 +356,9 @@ Being explicit about the boundary of the evidence:
 pnpm install --frozen-lockfile
 pnpm build:packages
 pnpm typecheck                 # 3 packages + desktop, clean
-pnpm test                      # 198 tests / 17 files
+pnpm test                      # 352 tests / 23 files (incl. PRs #11/#12 suites)
 pnpm demo                      # 9 protocol-level steps
-node scripts/verify-parity.mjs # 68 checks against the real sidecar
+node scripts/verify-parity.mjs # 74 checks against the real sidecar
 node scripts/verify-packaging.mjs
 pnpm bundle:host && pnpm test:e2e   # Electron boot smoke (needs the Electron binary)
 
@@ -330,5 +367,5 @@ node scripts/verify-parity.mjs --only=T5           # single group
 ```
 
 The harness exits `1` on any **failure**; `▲` lines are known gaps and do not fail the run,
-so it can be used as a CI gate today and as the scoreboard for closing the six remaining
-items.
+so it can be used as a CI gate today and as the scoreboard for closing the remaining round-3
+items listed in the update at the top of this document.

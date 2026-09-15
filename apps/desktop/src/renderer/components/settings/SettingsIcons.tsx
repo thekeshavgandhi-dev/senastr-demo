@@ -22,7 +22,9 @@ export type SettingsIconName =
   | "key"
   | "chevron"
   | "sliders"
-  | "keyboard";
+  | "keyboard"
+  | "chart"
+  | "download";
 
 export function SettingsIcon({ name, size = 16, ...props }: { name: SettingsIconName; size?: number } & SVGProps<SVGSVGElement>) {
   const common = {
@@ -68,6 +70,10 @@ export function SettingsIcon({ name, size = 16, ...props }: { name: SettingsIcon
       return <svg {...common}><rect x="3" y="4" width="18" height="16" rx="2" /><path d="m7 9 3 3-3 3M13 15h4" /></svg>;
     case "globe":
       return <svg {...common}><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" /></svg>;
+    case "chart":
+      return <svg {...common}><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" /></svg>;
+    case "download":
+      return <svg {...common}><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 20h16" /></svg>;
     case "check":
       return <svg {...common}><path d="m5 12 4 4L19 6" /></svg>;
     case "x":

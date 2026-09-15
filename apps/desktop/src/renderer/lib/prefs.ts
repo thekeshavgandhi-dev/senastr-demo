@@ -6,7 +6,7 @@
 
 export type ThemePref = "system" | "light" | "dark";
 export type PermissionMode = "ask" | "accept-edits" | "auto";
-export type AgentMode = "build" | "plan";
+export type AgentMode = "build" | "plan" | "goal";
 export type SessionSort = "recent" | "name" | "created";
 
 export interface SessionPrefs {
@@ -14,6 +14,8 @@ export interface SessionPrefs {
   archived?: boolean;
   mode?: AgentMode;
   permissionMode?: PermissionMode;
+  /** Reasoning level override for this session (host records the durable one). */
+  thinkingLevel?: string;
 }
 
 export interface ProjectMeta {
@@ -43,6 +45,10 @@ const K = {
   drafts: "senastr.drafts",
   settingsTab: "senastr.settingsTab",
   onboardingDone: "senastr.onboardingDone",
+  language: "senastr.language",
+  thinkingLevel: "senastr.thinkingLevel",
+  projectGroups: "senastr.projectGroups",
+  updateChannel: "senastr.updateChannel",
 } as const;
 
 export function loadJson<T>(key: string, fallback: T): T {
@@ -153,6 +159,20 @@ export const prefs = {
   },
   set settingsTab(v: string) {
     saveJson(K.settingsTab, v);
+  },
+  /** UI language tag. The host stores the durable copy; this one paints first. */
+  get language(): string {
+    return loadRaw<string>(K.language, "en");
+  },
+  set language(v: string) {
+    saveJson(K.language, v);
+  },
+  /** Default reasoning level for new sessions (empty = model default). */
+  get thinkingLevel(): string {
+    return loadRaw<string>(K.thinkingLevel, "");
+  },
+  set thinkingLevel(v: string) {
+    saveJson(K.thinkingLevel, v);
   },
 };
 

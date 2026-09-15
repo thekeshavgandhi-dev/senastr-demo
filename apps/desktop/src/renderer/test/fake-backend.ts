@@ -8,6 +8,7 @@ import type {
   McpServerInput,
   McpServerStatus,
   McpServerSummary,
+  MessageAttachment,
   PermissionGrant,
   PermissionRequest,
   ProjectContext,
@@ -27,10 +28,17 @@ import type {
   SkillRecord,
   SubagentInput,
   SubagentRecord,
+  ThinkingLevel,
   ToolResult,
   Usage,
 } from "@senastr/shared";
 import type { SenastrApi, SenastrEvent } from "../types";
+
+/** One token-usage bucket in the fake host's history. */
+export interface FakeUsageHistory {
+  buckets: Array<{ bucket: string; inputTokens: number; outputTokens: number; turns: number }>;
+  totals: { inputTokens: number; outputTokens: number; turns: number };
+}
 
 /**
  * QA harness: a complete in-memory stand-in for the Electron main process +
@@ -134,6 +142,171 @@ export class FakeBackend implements SenastrApi {
       this.projectOpenResult = null;
       return result;
     },
+    list: async () => ({ projects: [...this.projects], groups: [...this.projectGroups] }),
+    add: async (params: { path: string; name?: string; pinned?: boolean; groupId?: string }) => {
+      const record = {
+        path: params.path,
+        name: params.name,
+        addedAt: Date.now(),
+        lastOpenedAt: Date.now(),
+        pinned: params.pinned,
+        groupId: params.groupId,
+      };
+      this.projects.push(record);
+      return record;
+    },
+    update: async (params: { path: string; name?: string; pinned?: boolean; groupId?: string | null }) => {
+      const found = this.projects.find((p) => p.path === params.path);
+      if (!found) throw new Error("project not found");
+      if (params.name !== undefined) found.name = params.name;
+      if (params.pinned !== undefined) found.pinned = params.pinned;
+      if (params.groupId !== undefined) found.groupId = params.groupId ?? undefined;
+      return found;
+    },
+    remove: async (path: string) => {
+      this.projects = this.projects.filter((p) => p.path !== path);
+      return { ok: true };
+    },
+    groupList: async () => [...this.projectGroups],
+    groupSet: async (params: { id?: string; name: string }) => {
+      const group = { id: params.id ?? nextId("group"), name: params.name, createdAt: Date.now() };
+      this.projectGroups.push(group);
+      return group;
+    },
+    groupDelete: async (id: string) => {
+      this.projectGroups = this.projectGroups.filter((g) => g.id !== id);
+      return { ok: true };
+    },
+  };
+
+  /** Token history the fake host reports (set by tests). */
+  usageHistory: FakeUsageHistory = { buckets: [], totals: { inputTokens: 0, outputTokens: 0, turns: 0 } };
+
+  readonly stats = {
+    usage: async () => ({
+      buckets: this.usageHistory.buckets.map((row) => ({ ...row })),
+      totals: { ...this.usageHistory.totals },
+    }),
+    recordUsage: async () => ({ ok: true }),
+  };
+
+  readonly settings = {
+    get: async () => ({ ...this.hostSettings }),
+    set: async (patch: Record<string, unknown>) => {
+      this.hostSettings = { ...this.hostSettings, ...patch };
+      return this.hostSettings;
+    },
+  };
+
+  readonly fs = {
+    index: async () => ({ paths: [...this.fileIndex], truncated: false, elapsedMs: 1 }),
+  };
+
+  /** Command catalogue the fake host returns (builtin subset). */
+  commandCatalog = [
+    { id: "builtin.session.new", title: "New task", category: "Session", keywords: ["new"], source: "builtin" as const, slash: "new" },
+    {
+      id: "builtin.agent.compact",
+      title: "Compact conversation context",
+      category: "Session",
+      keywords: ["compact"],
+      source: "builtin" as const,
+      slash: "compact",
+    },
+    {
+      id: "builtin.mode.goal",
+      title: "Switch to Goal mode",
+      category: "Session",
+      keywords: ["goal"],
+      source: "builtin" as const,
+      slash: "goal-mode",
+    },
+  ];
+
+  readonly command = {
+    list: async (query: { query?: string } = {}) => {
+      const q = (query.query ?? "").toLowerCase();
+      const rows = q
+        ? this.commandCatalog.filter(
+            (c) => c.title.toLowerCase().includes(q) || c.keywords.some((k) => k.includes(q)),
+          )
+        : this.commandCatalog;
+      return { commands: [...rows], total: this.commandCatalog.length };
+    },
+  };
+
+  readonly updates = {
+    getState: async () => this.updateState,
+    check: async () => {
+      const state = { ...this.updateState, status: "not-available" as const };
+      this.updateState = state;
+      return state;
+    },
+    download: async () => this.updateState,
+    install: async () => this.updateState,
+    openReleases: async () => ({ ok: true }),
+  };
+
+  readonly clipboard = {
+    recordPaste: async () => ({ ok: true, entries: 1 }),
+    list: async () => [],
+    clear: async () => ({ ok: true }),
+    copy: async () => ({ ok: true }),
+  };
+
+  readonly attachment = {
+    add: async (params: { sessionId: string; kind?: "image" | "file"; name?: string; mimeType?: string }) => ({
+      id: nextId("att"),
+      kind: params.kind ?? "file",
+      name: params.name ?? "attachment",
+      mimeType: params.mimeType ?? "application/octet-stream",
+      storeId: `store/${nextId("att")}`,
+    }),
+    read: async () => ({ mimeType: "image/png", base64: "", name: "image" }),
+    remove: async () => ({ ok: true }),
+  };
+
+  readonly modelConfig = {
+    importScan: async () => ({ entries: [] }),
+    importRun: async () => ({ ok: true, providers: [] }),
+  };
+
+  /** Test knobs. */
+  projects: Array<{
+    path: string;
+    name?: string;
+    addedAt: number;
+    lastOpenedAt: number;
+    pinned?: boolean;
+    groupId?: string;
+  }> = [];
+
+  projectGroups: Array<{ id: string; name: string; createdAt: number }> = [];
+
+  revisions: Array<{
+    id: string;
+    sessionId: string;
+    label: string;
+    messageCount: number;
+    title: string;
+    createdAt: number;
+  }> = [];
+
+  hostSettings: Record<string, unknown> = { language: "en" };
+
+  fileIndex: string[] = [];
+
+  /** Session ids that received `chat/compact`. */
+  compactedSessions: string[] = [];
+
+  updateState: {
+    status: "idle" | "not-available" | "available" | "downloading" | "downloaded" | "error" | "unsupported";
+    currentVersion: string;
+    canSelfUpdate: boolean;
+  } = {
+    status: "idle",
+    currentVersion: "0.1.0",
+    canSelfUpdate: false,
   };
 
   readonly file = {
@@ -142,6 +315,7 @@ export class FakeBackend implements SenastrApi {
       this.filePickResult = [];
       return result;
     },
+    pickPhotos: async () => [],
   };
 
   /* ---------------------------------------------------------------- */
@@ -208,6 +382,65 @@ export class FakeBackend implements SenastrApi {
       this.touch(found);
       return found;
     },
+    fork: async (params: { id: string; title?: string; messageCount?: number }) => {
+      const source = this.sessions.get(params.id);
+      if (!source) throw new Error("session not found");
+      const now = Date.now();
+      const messages = params.messageCount != null ? source.messages.slice(0, params.messageCount) : source.messages;
+      const forked: Session = {
+        id: nextId("sess"),
+        title: params.title ?? `${source.title} (fork)`,
+        projectPath: source.projectPath,
+        mode: source.mode,
+        thinkingLevel: source.thinkingLevel,
+        forkedFrom: source.id,
+        createdAt: now,
+        updatedAt: now,
+        messageCount: messages.length,
+        messages: messages.map((m) => ({ ...m, id: nextId("msg") })),
+      };
+      this.sessions.set(forked.id, forked);
+      return forked;
+    },
+    setThinking: async (params: { id: string; level: string | null }) => {
+      const session = this.sessions.get(params.id);
+      if (!session) throw new Error("session not found");
+      session.thinkingLevel = (params.level ?? undefined) as Session["thinkingLevel"];
+      return session;
+    },
+    scratch: async (params: { sessionId: string; create?: boolean }) => ({
+      sessionId: params.sessionId,
+      dir: `/tmp/fake-data/scratch/${params.sessionId}`,
+      exists: Boolean(params.create),
+    }),
+    openScratch: async (sessionId: string) => ({
+      ok: true,
+      dir: `/tmp/fake-data/scratch/${sessionId}`,
+    }),
+    openFolder: async () => ({ ok: true }),
+    revisions: {
+      list: async () => [...this.revisions],
+      save: async (params: { sessionId: string; label?: string }) => {
+        const revision = {
+          id: nextId("rev"),
+          sessionId: params.sessionId,
+          label: params.label ?? "Revision",
+          messageCount: this.sessions.get(params.sessionId)?.messages.length ?? 0,
+          title: this.sessions.get(params.sessionId)?.title ?? "",
+          createdAt: Date.now(),
+        };
+        this.revisions.push(revision);
+        return revision;
+      },
+      activate: async (params: { sessionId: string; revisionId: string }) => {
+        const session = this.sessions.get(params.sessionId);
+        if (!session) throw new Error("session not found");
+        return session;
+      },
+      remove: async () => ({ ok: true }),
+    },
+    importScan: async () => ({ sessions: [], skipped: [] }),
+    importRun: async () => ({ imported: 0, sessions: [], errors: [] }),
     appendMessages: async (id: string, messages: ChatMessage[]) => {
       const found = await this.session.get(id);
       found.messages.push(...messages);
@@ -674,6 +907,8 @@ export class FakeBackend implements SenastrApi {
   };
 
   readonly notify = {
+    showNative: async () => ({ ok: true, shown: false }),
+    setViewingSession: async () => ({ ok: true }),
     list: async () => [...this.notifications],
     markRead: async (params: { id?: string; all?: boolean }) => {
       for (const n of this.notifications) {
@@ -692,7 +927,14 @@ export class FakeBackend implements SenastrApi {
   /* ---------------------------------------------------------------- */
 
   readonly chat = {
-    send: async (params: { sessionId: string; text: string; modelRef: { providerId: string; model: string }; mode?: SessionMode }) => {
+    send: async (params: {
+      sessionId: string;
+      text: string;
+      modelRef: { providerId: string; model: string };
+      mode?: SessionMode;
+      attachments?: MessageAttachment[];
+      thinkingLevel?: ThinkingLevel | null;
+    }) => {
       if (!this.sessions.has(params.sessionId)) throw new Error(`rpc -32005: session not found: ${params.sessionId}`);
       this.chatSends.push({ ...params });
       // The real main process applies the mode with the send.
@@ -713,6 +955,14 @@ export class FakeBackend implements SenastrApi {
     enhance: async (params: { text: string; modelRef: { providerId: string; model: string } }) => {
       this.enhanceCalls.push(params);
       return { text: `Enhanced: ${params.text}`, usage: { inputTokens: 3, outputTokens: 4 } as Usage };
+    },
+    compact: async (params: { sessionId: string }) => {
+      this.compactedSessions.push(params.sessionId);
+      return {
+        compacted: false,
+        dropped: 0,
+        session: this.sessions.get(params.sessionId) as Session,
+      };
     },
     suggestTitle: async (params: { modelRef: { providerId: string; model: string }; excerpt: string }) => {
       this.suggestTitleCalls.push(params);

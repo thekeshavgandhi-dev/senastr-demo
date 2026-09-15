@@ -1,5 +1,32 @@
-import type { ChatMessage } from "@senastr/shared";
+import type { ChatMessage, MessageAttachment } from "@senastr/shared";
 import { BASE_PROTOCOL } from "./prompt";
+
+/** Image attachments that carry a hydrated payload, ready for the wire. */
+function imageParts(message: ChatMessage): MessageAttachment[] {
+  return (message.attachments ?? []).filter(
+    (a) => a.kind === "image" && typeof a.dataBase64 === "string" && a.dataBase64.length > 0,
+  );
+}
+
+/** Human-readable footer for non-image attachments (files, large pastes). */
+function attachmentNote(message: ChatMessage): string {
+  const extras = (message.attachments ?? []).filter((a) => a.kind !== "image" || !a.dataBase64);
+  if (extras.length === 0) return "";
+  return extras
+    .map((a) => {
+      if (a.text) return `--- attached: ${a.name} ---\n${a.text}`;
+      if (a.path) return `--- attached file: ${a.path} ---`;
+      return `--- attached: ${a.name} (${a.mimeType}, ${a.bytes ?? 0} bytes) ---`;
+    })
+    .join("\n");
+}
+
+/** Text a user message contributes once attachments are folded in. */
+function userText(message: ChatMessage): string {
+  const note = attachmentNote(message);
+  if (!note) return message.content;
+  return message.content ? `${message.content}\n\n${note}` : note;
+}
 
 /**
  * Default system prompt: identity + the operating protocol.
@@ -23,7 +50,21 @@ export function toOpenAIMessages(system: string | undefined, messages: ChatMessa
   if (system) out.push({ role: "system", content: system });
   for (const m of messages) {
     if (m.role === "user") {
-      out.push({ role: "user", content: m.content });
+      const images = imageParts(m);
+      if (images.length > 0) {
+        out.push({
+          role: "user",
+          content: [
+            ...(userText(m) ? [{ type: "text", text: userText(m) }] : []),
+            ...images.map((a) => ({
+              type: "image_url",
+              image_url: { url: `data:${a.mimeType};base64,${a.dataBase64}` },
+            })),
+          ],
+        });
+        continue;
+      }
+      out.push({ role: "user", content: userText(m) });
     } else if (m.role === "assistant") {
       if (m.toolCalls && m.toolCalls.length > 0) {
         out.push({
@@ -67,7 +108,20 @@ export function toAnthropicMessages(
       }
       out.push({ role: "assistant", content: blocks.length > 0 ? blocks : "" });
     } else if (m.role === "user") {
-      out.push({ role: "user", content: m.content });
+      const images = imageParts(m);
+      if (images.length > 0) {
+        const blocks: unknown[] = [];
+        if (userText(m)) blocks.push({ type: "text", text: userText(m) });
+        for (const a of images) {
+          blocks.push({
+            type: "image",
+            source: { type: "base64", media_type: a.mimeType, data: a.dataBase64 },
+          });
+        }
+        out.push({ role: "user", content: blocks });
+        continue;
+      }
+      out.push({ role: "user", content: userText(m) });
     } else {
       const block = { type: "tool_result", tool_use_id: m.toolCallId, content: m.content };
       const last = out[out.length - 1];

@@ -15,6 +15,7 @@
     "@senastr/agent-runtime": "workspace:*",
     "@senastr/host-core": "workspace:*",
     "@senastr/shared": "workspace:*",
+    "electron-updater": "^6.8.9",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },

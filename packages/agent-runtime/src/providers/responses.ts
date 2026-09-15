@@ -1,6 +1,7 @@
 import type { ChatMessage, Usage } from "@senastr/shared";
 import type { ModelSpec, Provider, ProviderChatParams, ProviderEvent } from "../types";
 import { parseSseLines, parseToolArgs, safeReadText } from "./openai";
+import { reasoningEffortFor } from "@senastr/shared";
 import { postToModel } from "./resilient";
 
 /** OpenAI Responses API streaming adapter. Named OpenAI providers use this
@@ -17,6 +18,9 @@ export class OpenAIResponsesProvider implements Provider {
     };
     if (params.system) body.instructions = params.system;
     if (params.maxTokens) body.max_output_tokens = params.maxTokens;
+    if (typeof params.temperature === "number" && !params.thinkingLevel) body.temperature = params.temperature;
+    const effort = params.thinkingLevel ? reasoningEffortFor(params.thinkingLevel) : null;
+    if (effort) body.reasoning = { effort, summary: "auto" };
     if (params.tools.length) {
       body.tools = params.tools.map((tool) => ({
         type: "function",
@@ -59,6 +63,9 @@ export class OpenAIResponsesProvider implements Provider {
         continue;
       }
       const type = event?.type;
+      if (type === "response.reasoning_summary_text.delta" && typeof event.delta === "string") {
+        yield { kind: "reasoning", delta: event.delta };
+      }
       if (type === "response.output_text.delta" && typeof event.delta === "string") {
         yield { kind: "text", delta: event.delta };
         continue;

@@ -4,6 +4,7 @@ import {
   Menu,
   Notification,
   Tray,
+  clipboard,
   dialog,
   ipcMain,
   nativeImage,
@@ -18,6 +19,7 @@ import {
   AgentRuntime,
   PROMPT_ENHANCEMENT_SYSTEM,
   TITLE_SUMMARIZE_SYSTEM,
+  compactHistory,
   completeOneShot,
   type HostBridge,
   type ModelSpec,
@@ -25,11 +27,16 @@ import {
 import {
   Methods,
   NdjsonRpcClient,
+  proxyEnvironment,
   type AppNotification,
+  type AppSettings,
   type AskAnswers,
   type ChatMessage,
+  type ExternalAgentSource,
+  type ExternalSessionSummary,
   type GitInfo,
   type MemoryScope,
+  type MessageAttachment,
   type ModelRef,
   type PermissionRequest,
   type ProjectContext,
@@ -42,9 +49,11 @@ import {
   type SessionMode,
   type SkillRecord,
   type SubagentRecord,
+  type ThinkingLevel,
   type ToolDefinition,
   type ToolResult,
 } from "@senastr/shared";
+import { UpdatesService } from "./updates";
 
 /**
  * senastr desktop — Electron main process.
@@ -81,6 +90,49 @@ const manuallyRunningTasks = new Set<string>();
 let tray: Tray | null = null;
 let quitting = false;
 let closeToTray = true;
+
+/** In-app updates (electron-updater lane + manifest lane). */
+const updates = new UpdatesService({
+  repository: process.env.SENASTR_UPDATE_REPO,
+  feedUrl: process.env.SENASTR_UPDATE_FEED,
+});
+
+/**
+ * Clipboard history (parity: pi-desktop clipboard history). Small, bounded,
+ * in-memory: pastes the user makes in the composer can be re-attached later
+ * without leaving the app.
+ */
+interface ClipboardEntry {
+  id: string;
+  text: string;
+  createdAt: number;
+  bytes: number;
+}
+const clipboardHistory: ClipboardEntry[] = [];
+const CLIPBOARD_LIMIT = 50;
+
+function recordClipboardEntry(text: string): void {
+  const value = typeof text === "string" ? text : "";
+  if (!value.trim()) return;
+  const existing = clipboardHistory.findIndex((entry) => entry.text === value);
+  if (existing >= 0) clipboardHistory.splice(existing, 1);
+  clipboardHistory.unshift({
+    id: randomUUID(),
+    text: value,
+    createdAt: Date.now(),
+    bytes: Buffer.byteLength(value, "utf8"),
+  });
+  while (clipboardHistory.length > CLIPBOARD_LIMIT) clipboardHistory.pop();
+}
+
+/** Native notifications are suppressed while the user is looking at the
+ *  session that produced them (parity: notification policy). */
+let viewingSessionId: string | null = null;
+function focusedOnSession(sessionId?: string): boolean {
+  if (!sessionId || !win) return false;
+  if (win.isFocused() === false) return false;
+  return viewingSessionId === sessionId;
+}
 
 function log(...args: unknown[]): void {
   console.log("[senastr/main]", ...args);
@@ -159,6 +211,25 @@ class RpcHostBridge implements HostBridge {
     // May block on an interactive permission prompt (120s max) — generous ceiling.
     return this.client.request<ToolResult>(Methods.toolRun, req, { timeoutMs: 15 * 60_000 });
   }
+
+  readAttachment(storeId: string) {
+    return this.client.request<{ mimeType: string; base64: string; name: string }>(
+      Methods.attachmentRead,
+      { storeId },
+      { timeoutMs: 20_000 },
+    );
+  }
+
+  recordUsage(record: {
+    sessionId: string;
+    providerId?: string;
+    model?: string;
+    inputTokens?: number;
+    outputTokens?: number;
+    stopReason?: string;
+  }) {
+    return this.client.request(Methods.statsRecordUsage, record, { timeoutMs: 10_000 });
+  }
 }
 
 /**
@@ -236,12 +307,17 @@ async function startHost(): Promise<NdjsonRpcClient> {
 /* model resolution                                                     */
 /* ------------------------------------------------------------------ */
 
+let cachedProxy: AppSettings["proxy"] | undefined;
+
 async function resolveModelSpec(client: NdjsonRpcClient, ref: ModelRef): Promise<ModelSpec> {
   const provider = await client.request<ProviderConfig>(Methods.providerGet, { id: ref.providerId }, {
     timeoutMs: 10_000,
   });
   if (provider.enabled === false) throw new Error(`provider is disabled: ${provider.label}`);
   const apiKeys = provider.apiKeys?.length ? provider.apiKeys : provider.apiKey ? [provider.apiKey] : undefined;
+  // Per-model configuration (context window, output cap, temperature, the
+  // reasoning ladder) travels with every request (parity: model configuration).
+  const modelConfig = provider.modelConfigs?.[ref.model];
   return {
     kind: provider.kind,
     model: ref.model,
@@ -252,7 +328,28 @@ async function resolveModelSpec(client: NdjsonRpcClient, ref: ModelRef): Promise
     headers: provider.headers,
     rateLimitPerMin: provider.rateLimitPerMin,
     providerId: provider.id,
+    temperature: modelConfig?.temperature,
+    maxOutputTokens: modelConfig?.maxOutputTokens,
+    contextWindow: modelConfig?.contextWindow,
+    thinkingLevel: modelConfig?.defaultThinkingLevel ?? undefined,
+    proxy: cachedProxy,
   };
+}
+
+/**
+ * Apply the configured outbound proxy to this process and to every child it
+ * spawns (host-core, MCP stdio servers, shell tools). Custom proxies are also
+ * applied to model HTTP requests through an undici dispatcher; this env layer
+ * is what makes non-HTTP children honour it too.
+ */
+function applyProxyEnvironment(proxy: AppSettings["proxy"]): void {
+  cachedProxy = proxy;
+  const env = proxyEnvironment(proxy ?? { mode: "system" }, process.env);
+  for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy"]) {
+    const value = env[key];
+    if (typeof value === "string") process.env[key] = value;
+    else delete process.env[key];
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -519,6 +616,53 @@ function setupIpc(): void {
     "session/append-messages",
     (_e, p: { id: string; messages: Session["messages"] }) => req(Methods.sessionAppendMessages, p),
   );
+  ipcMain.handle("session/fork", (_e, p: { id: string; title?: string; messageCount?: number }) =>
+    req(Methods.sessionFork, p),
+  );
+  ipcMain.handle("session/set-thinking", (_e, p: { id: string; level: ThinkingLevel | null }) =>
+    req(Methods.sessionSetThinking, p),
+  );
+  ipcMain.handle("session/scratch", (_e, p: { sessionId: string; create?: boolean }) =>
+    req(Methods.sessionScratch, p ?? {}),
+  );
+  ipcMain.handle("session/open-scratch", async (_e, p: { sessionId: string }) => {
+    if (!host) throw new Error("host-core is not ready");
+    const info = await host.request<{ dir: string }>(Methods.sessionScratch, {
+      sessionId: p.sessionId,
+      create: true,
+    });
+    const error = await shell.openPath(info.dir);
+    return { ok: !error, dir: info.dir, error: error || undefined };
+  });
+  ipcMain.handle("session/open-folder", async (_e, p: { path: string }) => {
+    if (!p?.path) throw new Error("path is required");
+    const error = await shell.openPath(p.path);
+    return { ok: !error, error: error || undefined };
+  });
+
+  ipcMain.handle("session/revisions/list", (_e, p: { sessionId: string }) =>
+    req(Methods.sessionRevisionsList, p),
+  );
+  ipcMain.handle("session/revisions/save", (_e, p: { sessionId: string; label?: string }) =>
+    req(Methods.sessionRevisionsSave, p),
+  );
+  ipcMain.handle("session/revisions/activate", (_e, p: { sessionId: string; revisionId: string }) =>
+    req(Methods.sessionRevisionsActivate, p),
+  );
+  ipcMain.handle("session/revisions/delete", (_e, p: { sessionId: string; revisionId: string }) =>
+    req(Methods.sessionRevisionsDelete, p),
+  );
+
+  ipcMain.handle("session/import-scan", (_e, p: { sources?: ExternalAgentSource[] } = {}) =>
+    req(Methods.sessionImportScan, p, 60_000),
+  );
+  ipcMain.handle(
+    "session/import-run",
+    (_e, p: { sessions: ExternalSessionSummary[]; projectPathOverride?: string | null }) =>
+      req(Methods.sessionImportRun, p, 120_000),
+  );
+  ipcMain.handle("model-config/import-scan", () => req(Methods.modelConfigImportScan));
+  ipcMain.handle("model-config/import-run", (_e, p) => req(Methods.modelConfigImportRun, p));
   ipcMain.handle("file/pick", async (_e, p: { projectPath?: string | null } = {}) => {
     if (!win) return [];
     const opts: Electron.OpenDialogOptions = {
@@ -529,6 +673,21 @@ function setupIpc(): void {
     const r = await dialog.showOpenDialog(win, opts);
     return r.canceled ? [] : r.filePaths;
   });
+
+  ipcMain.handle(
+    "attachment/add",
+    (_e, p: {
+      sessionId: string;
+      kind?: "image" | "file";
+      name?: string;
+      mimeType?: string;
+      dataBase64?: string;
+      path?: string;
+      text?: string;
+    }) => req(Methods.attachmentAdd, p),
+  );
+  ipcMain.handle("attachment/read", (_e, p: { storeId: string }) => req(Methods.attachmentRead, p, 20_000));
+  ipcMain.handle("attachment/delete", (_e, p: { storeId: string }) => req(Methods.attachmentDelete, p));
 
   ipcMain.handle("provider/list", () => req(Methods.providerList));
   ipcMain.handle("provider/set", (_e, p: { provider: ProviderConfig }) => req(Methods.providerSet, p));
@@ -594,6 +753,29 @@ function setupIpc(): void {
     prList(p.projectPath, Math.min(Math.max(p.limit ?? 20, 1), 50)),
   );
 
+  ipcMain.handle("project/list", () => req(Methods.projectList));
+  ipcMain.handle("project/add", (_e, p) => req(Methods.projectAdd, p));
+  ipcMain.handle("project/update", (_e, p) => req(Methods.projectUpdate, p));
+  ipcMain.handle("project/remove", (_e, p: { path: string }) => req(Methods.projectRemove, p));
+  ipcMain.handle("project-group/list", () => req(Methods.projectGroupList));
+  ipcMain.handle("project-group/set", (_e, p) => req(Methods.projectGroupSet, p));
+  ipcMain.handle("project-group/delete", (_e, p: { id: string }) => req(Methods.projectGroupDelete, p));
+
+  ipcMain.handle("stats/usage", (_e, p) => req(Methods.statsUsage, p ?? {}));
+  ipcMain.handle("stats/record-usage", (_e, p) => req(Methods.statsRecordUsage, p));
+
+  ipcMain.handle("settings/get", () => req(Methods.settingsGet));
+  ipcMain.handle("settings/set", async (_e, p: Partial<AppSettings>) => {
+    const next = (await req(Methods.settingsSet, p ?? {})) as AppSettings;
+    applyProxyEnvironment(next.proxy);
+    return next;
+  });
+
+  ipcMain.handle("fs/index", (_e, p: { projectPath: string; force?: boolean; limit?: number }) =>
+    req(Methods.fsIndex, p, 60_000),
+  );
+  ipcMain.handle("command/list", (_e, p) => req(Methods.commandList, p ?? {}));
+
   ipcMain.handle("permission/list", () => req(Methods.permissionList));
   ipcMain.handle("permission/clear", (_e, p: { sessionId?: string; tool?: string }) =>
     req(Methods.permissionClear, p),
@@ -620,6 +802,38 @@ function setupIpc(): void {
     req(Methods.pluginSetEnabled, p),
   );
 
+  ipcMain.handle(
+    "notify/show-native",
+    (
+      _e,
+      p: { title: string; body?: string; silent?: boolean; sessionId?: string; taskId?: string; kind?: AppNotification["kind"] },
+    ) => {
+      // Native notifications are the OS-level mirror of the in-app centre.
+      if (!Notification.isSupported()) return { ok: false, shown: false };
+      if (!p?.silent && focusedOnSession(p.sessionId)) return { ok: true, shown: false };
+      try {
+        new Notification({ title: p.title, body: p.body ?? "", silent: p.silent === true }).show();
+        return { ok: true, shown: true };
+      } catch (error) {
+        return { ok: false, shown: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+  );
+
+  ipcMain.handle("updates/get-state", () => updates.getState());
+  ipcMain.handle("updates/check", () => updates.check());
+  ipcMain.handle("updates/download", () => updates.download());
+  ipcMain.handle("updates/install", () => updates.install());
+  ipcMain.handle("updates/open-releases", () => {
+    updates.openReleases();
+    return { ok: true };
+  });
+
+  ipcMain.handle("notify/set-viewing-session", (_e, p: { sessionId: string | null }) => {
+    viewingSessionId = p?.sessionId ?? null;
+    return { ok: true };
+  });
+
   ipcMain.handle("notify/list", () => [...notifications]);
   ipcMain.handle("notify/mark-read", (_e, p: { id?: string; all?: boolean }) => {
     if (p.all) {
@@ -635,9 +849,54 @@ function setupIpc(): void {
     return { ok: true };
   });
 
+  ipcMain.handle("clipboard/record-paste", (_e, p: { text: string }) => {
+    recordClipboardEntry(p?.text ?? "");
+    return { ok: true, entries: clipboardHistory.length };
+  });
+  ipcMain.handle("clipboard/list", () => [...clipboardHistory]);
+  ipcMain.handle("clipboard/clear", () => {
+    clipboardHistory.length = 0;
+    return { ok: true };
+  });
+  ipcMain.handle("clipboard/copy", (_e, p: { text: string }) => {
+    clipboard.writeText(String(p?.text ?? ""));
+    return { ok: true };
+  });
+
+  ipcMain.handle("composer/pick-photos", async () => {
+    if (!win) return [];
+    const result = await dialog.showOpenDialog(win, {
+      title: "Attach images",
+      properties: ["openFile", "multiSelections"],
+      filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "gif", "webp", "bmp"] }],
+    });
+    if (result.canceled) return [];
+    return Promise.all(
+      result.filePaths.map(async (file) => {
+        const data = readFileSync(file);
+        const ext = file.split(".").pop()?.toLowerCase() ?? "png";
+        return {
+          name: file.split(/[\\/]/).pop() ?? "image",
+          mimeType: `image/${ext === "jpg" ? "jpeg" : ext}`,
+          dataBase64: data.toString("base64"),
+          bytes: data.byteLength,
+        };
+      }),
+    );
+  });
+
   ipcMain.handle(
     "chat/send",
-    async (_e, p: { sessionId: string; text: string; modelRef: ModelRef }) => {
+    async (
+      _e,
+      p: {
+        sessionId: string;
+        text: string;
+        modelRef: ModelRef;
+        attachments?: MessageAttachment[];
+        thinkingLevel?: ThinkingLevel | null;
+      },
+    ) => {
       if (!host || !runtime) throw new Error("agent not ready");
       const { sessionId, text, modelRef: ref } = p;
       const runtimeRef = runtime;
@@ -647,8 +906,15 @@ function setupIpc(): void {
       void (async () => {
         let model: ModelSpec;
         try {
-          if (mode === "build" || mode === "plan") {
+          if (mode === "build" || mode === "plan" || mode === "goal") {
             await hostRef.request(Methods.sessionSetMode, { id: sessionId, mode }, { timeoutMs: 10_000 });
+          }
+          if (p.thinkingLevel !== undefined) {
+            await hostRef.request(
+              Methods.sessionSetThinking,
+              { id: sessionId, level: p.thinkingLevel },
+              { timeoutMs: 10_000 },
+            );
           }
           model = await resolveModelSpec(hostRef, ref);
         } catch (err) {
@@ -661,7 +927,12 @@ function setupIpc(): void {
           return;
         }
         try {
-          for await (const ev of runtimeRef.runTurn({ sessionId, userMessage: text, model })) {
+          for await (const ev of runtimeRef.runTurn({
+            sessionId,
+            userMessage: text,
+            model,
+            attachments: p.attachments,
+          })) {
             sendToRenderer(ev);
             if (ev.type === "ask/request") {
               pushNotification({
@@ -705,6 +976,41 @@ function setupIpc(): void {
   ipcMain.handle("chat/delegations", (_e, p: { sessionId: string }) =>
     runtime ? runtime.listDelegations(p.sessionId) : [],
   );
+
+  // /compact — replace the transcript window with a bounded one plus a
+  // checkpoint note, exactly like the automatic compaction path but on demand
+  // (parity: pi-desktop `agent/compact`).
+  ipcMain.handle("chat/compact", async (_e, p: { sessionId: string; keep?: number }) => {
+    if (!host) throw new Error("host-core is not ready");
+    const session = await host.request<Session>(Methods.sessionGet, { id: p.sessionId });
+    const keep = Math.min(Math.max(p.keep ?? 8, 2), 40);
+    if (session.messages.length <= keep + 1) {
+      return { compacted: false, dropped: 0, session };
+    }
+    const result = compactHistory(session.messages, undefined);
+    const trimmed =
+      result.dropped > 0
+        ? result.messages
+        : [
+            ...session.messages.slice(0, 2),
+            {
+              id: randomUUID(),
+              role: "user" as const,
+              content: `[context checkpoint] Earlier turns were compacted on request; resuming with the most recent ${keep} messages.`,
+              createdAt: Date.now(),
+            },
+            ...session.messages.slice(-keep),
+          ];
+    // Snapshot first so the pre-compaction transcript stays recoverable.
+    await host
+      .request(Methods.sessionRevisionsSave, { sessionId: p.sessionId, label: "Before compaction" })
+      .catch(() => undefined);
+    const replaced = await host.request<Session>(Methods.sessionReplaceMessages, {
+      id: p.sessionId,
+      messages: trimmed,
+    });
+    return { compacted: true, dropped: session.messages.length - trimmed.length, session: replaced };
+  });
 
   ipcMain.handle(
     "chat/enhance",
@@ -928,6 +1234,14 @@ if (!app.requestSingleInstanceLock()) {
       app.quit();
       return;
     }
+    // Apply the persisted proxy before any provider request or child process.
+    try {
+      const settings = await host.request<AppSettings>(Methods.settingsGet, {}, { timeoutMs: 10_000 });
+      applyProxyEnvironment(settings.proxy);
+    } catch (err) {
+      log("could not load settings; using system proxy", err);
+    }
+    updates.onChange((state) => sendToRenderer({ kind: "updates/state", state }));
     setupIpc();
     startScheduler();
     createWindow();

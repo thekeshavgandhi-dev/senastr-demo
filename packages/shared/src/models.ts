@@ -1,8 +1,35 @@
 import type { ToolCall } from "./tools";
+import type { ThinkingLevel } from "./thinking-levels";
+import type { NetworkProxySettings } from "./network-proxy";
+
+export type { ThinkingLevel };
 
 /** Roles used inside a persisted session transcript. `tool` messages carry
  *  the result of one tool call (linked via toolCallId). */
 export type Role = "user" | "assistant" | "tool";
+
+/** A user-supplied file or image riding along with a message. Image payloads
+ *  never live in the transcript: `storeId` points at a copy under
+ *  `<data>/attachments/` that only the host core can read. */
+export interface MessageAttachment {
+  id: string;
+  kind: "image" | "file";
+  /** Original file name, for display only. */
+  name: string;
+  /** MIME type, e.g. `image/png`. */
+  mimeType: string;
+  /** Bytes on disk (or of the pasted text, for large pastes). */
+  bytes?: number;
+  /** Host-core attachment id; resolve with `attachment/read`. */
+  storeId?: string;
+  /** Project-relative path, for files pulled out of the workspace. */
+  path?: string;
+  /** Inline text content for large pastes. */
+  text?: string;
+  /** Hydration-only: base64 payload resolved by the runtime just before a
+   *  model request. Never persisted in a transcript. */
+  dataBase64?: string;
+}
 
 export interface ChatMessage {
   id: string;
@@ -15,6 +42,10 @@ export interface ChatMessage {
   toolCallId?: string;
   /** Present on tool messages: the tool name (denormalized for the UI). */
   toolName?: string;
+  /** Files/images the user attached to this message (parity: pi-desktop). */
+  attachments?: MessageAttachment[];
+  /** Reasoning text streamed by a reasoning model, kept for display. */
+  reasoning?: string;
 }
 
 export interface SessionMeta {
@@ -26,6 +57,13 @@ export interface SessionMeta {
   /** Durable operating mode. Plan mode is read-only until a submitted plan
    *  is approved. Defaults to "build" for sessions created before modes. */
   mode: SessionMode;
+  /** Reasoning level for this session (parity: pi-desktop thinking levels).
+   *  Absent means "use the model's default / strongest enabled level". */
+  thinkingLevel?: ThinkingLevel;
+  /** Session this one was forked from, when it was created by a fork. */
+  forkedFrom?: string;
+  /** Id of the revision currently active, when revisions are in play. */
+  activeRevision?: string;
   createdAt: number;
   updatedAt: number;
   messageCount: number;
@@ -77,8 +115,43 @@ export interface ProviderConfig {
   rateLimitPerMin?: number;
   models: string[];
   defaultModel?: string;
+  /** Per-model overrides: context window, output cap, temperature and the
+   * reasoning ladder (parity: pi-desktop model configuration). */
+  modelConfigs?: Record<string, ModelConfig>;
   /** Disabled providers stay configured but are omitted from model pickers. */
   enabled?: boolean;
+}
+
+/**
+ * Per-model configuration. Every field is optional: absent means "use the
+ * built-in default for this provider family".
+ */
+export interface ModelConfig {
+  /** Context window in tokens (drives the context-usage bar + compaction). */
+  contextWindow?: number;
+  /** Maximum output tokens per request. */
+  maxOutputTokens?: number;
+  /** Sampling temperature; omitted means the provider default. */
+  temperature?: number;
+  /** Does this model accept a reasoning/thinking control? */
+  reasoning?: boolean;
+  /** Levels the model publishes, in canonical order. */
+  supportedThinkingLevels?: ThinkingLevel[];
+  /** Level a new session starts at when none is stored. */
+  defaultThinkingLevel?: ThinkingLevel | null;
+  /** Provider-specific spelling of each level (e.g. `{"high":"high"}`). */
+  thinkingLevelMap?: Partial<Record<ThinkingLevel, string | null>>;
+}
+
+/** Renderer-safe model configuration (no credentials involved). */
+export interface ModelConfigSummary {
+  model: string;
+  contextWindow?: number;
+  maxOutputTokens?: number;
+  temperature?: number;
+  reasoning: boolean;
+  thinkingLevels: ThinkingLevel[];
+  defaultThinkingLevel: ThinkingLevel | null;
 }
 
 /** Renderer-safe provider metadata. API keys are omitted (only the count is
@@ -97,6 +170,8 @@ export interface ProviderSummary {
   rateLimitPerMin?: number;
   models: string[];
   defaultModel?: string;
+  /** Per-model overrides (context window, output cap, temperature, reasoning). */
+  modelConfigs?: Record<string, ModelConfig>;
   enabled: boolean;
 }
 
@@ -178,6 +253,19 @@ export interface PluginToolDef {
   args?: ToolParameters;
 }
 
+/** A slash/palette command contributed by a plugin (parity: pi-desktop
+ *  `contributes.commands`). `command` runs through the same confined,
+ *  permission-gated shell as plugin tools. */
+export interface PluginCommandDef {
+  /** Slash alias, unique across the merged command namespace. */
+  name: string;
+  title?: string;
+  description?: string;
+  keywords?: string[];
+  /** Optional shell command template (same `{arg}` substitution as tools). */
+  command?: string;
+}
+
 export interface PluginManifest {
   name: string;
   version: string;
@@ -188,6 +276,7 @@ export interface PluginManifest {
     net?: string[];
   };
   tools?: PluginToolDef[];
+  commands?: PluginCommandDef[];
 }
 
 export interface PluginInfo {
@@ -196,6 +285,7 @@ export interface PluginInfo {
   description?: string;
   author?: string;
   tools: string[];
+  commands?: PluginCommandDef[];
   permissions?: {
     fs?: string[];
     net?: string[];
@@ -334,14 +424,17 @@ export interface Usage {
  * Why a turn ended.
  *  `stuck` — the runtime stopped it: the model repeated a failing call past
  *  the retry threshold, so continuing would only burn the step budget.
+ *  `goal` — a goal-mode turn that reached its objective and reported done.
  */
-export type TurnStopReason = "stop" | "max-steps" | "aborted" | "error" | "plan" | "stuck";
+export type TurnStopReason = "stop" | "max-steps" | "aborted" | "error" | "plan" | "stuck" | "goal";
 
 /** Events the agent runtime emits while a turn is running. Forwarded
  *  verbatim from main to the renderer as `senastr/event`. */
 export type AgentEvent =
   | { type: "turn/start"; sessionId: string; turnId: string }
   | { type: "assistant/delta"; delta: string }
+  /** Reasoning/thinking text from a reasoning model (display only). */
+  | { type: "assistant/reasoning"; delta: string }
   | { type: "tool/call"; call: ToolCall }
   | { type: "tool/result"; callId: string; ok: boolean; result: ToolResult }
   | {
@@ -400,7 +493,19 @@ export type AskAnswers = Array<string[] | null>;
 /* Plan mode                                                           */
 /* ------------------------------------------------------------------ */
 
-export type SessionMode = "build" | "plan";
+/**
+ * Operating mode. `build` is the everyday agent; `plan` researches and freezes
+ * an implementation plan for approval; `goal` locks an objective and acceptance
+ * criteria and lets the agent choose the path (parity: pi-desktop's Agent /
+ * Plan / Goal modes).
+ */
+export type SessionMode = "build" | "plan" | "goal";
+
+export const SESSION_MODES: readonly SessionMode[] = ["build", "plan", "goal"] as const;
+
+export function isSessionMode(value: unknown): value is SessionMode {
+  return value === "build" || value === "plan" || value === "goal";
+}
 
 /** Structured plan submitted via the submit_plan tool while in plan mode. */
 export interface PlanProposal {
@@ -661,4 +766,204 @@ export interface AppNotification {
   taskId?: string;
   createdAt: number;
   read: boolean;
+}
+
+/* ------------------------------------------------------------------ */
+/* Session revisions                                                   */
+/* ------------------------------------------------------------------ */
+
+/** A named snapshot of a session transcript. Revisions are append-only:
+ *  activating one truncates the live transcript back to that point without
+ *  deleting the revision itself, so an experiment is always recoverable. */
+export interface SessionRevision {
+  id: string;
+  sessionId: string;
+  label: string;
+  /** Message count captured by this revision. */
+  messageCount: number;
+  /** Turn count when the revision was taken (informational). */
+  title: string;
+  createdAt: number;
+}
+
+/* ------------------------------------------------------------------ */
+/* Projects + project groups                                           */
+/* ------------------------------------------------------------------ */
+
+/** A project the user added to the workspace. Sessions bind to a path; the
+ *  project record keeps ordering, a display name and grouping durable. */
+export interface ProjectRecord {
+  path: string;
+  name?: string;
+  addedAt: number;
+  lastOpenedAt: number;
+  pinned?: boolean;
+  /** Ordered id of the group this project belongs to, when any. */
+  groupId?: string;
+  /** Session count at last refresh (informational for the sidebar). */
+  sessionCount?: number;
+}
+
+export interface ProjectGroup {
+  id: string;
+  name: string;
+  createdAt: number;
+}
+
+export interface ProjectInput {
+  path: string;
+  name?: string;
+  pinned?: boolean;
+  groupId?: string | null;
+}
+
+export interface ProjectGroupInput {
+  id?: string;
+  name: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* Token usage history                                                 */
+/* ------------------------------------------------------------------ */
+
+/** One completed turn's token accounting. Written by the host core when a
+ *  turn ends, so usage survives even if the window is closed. */
+export interface UsageRecord {
+  id: string;
+  sessionId: string;
+  at: number;
+  providerId?: string;
+  model?: string;
+  inputTokens: number;
+  outputTokens: number;
+  stopReason?: TurnStopReason;
+}
+
+export interface TokenUsageBucket {
+  /** ISO date for `day`, ISO week for `week`, `YYYY-MM` for `month`. */
+  bucket: string;
+  inputTokens: number;
+  outputTokens: number;
+  turns: number;
+}
+
+export interface TokenUsageHistory {
+  buckets: TokenUsageBucket[];
+  totals: { inputTokens: number; outputTokens: number; turns: number };
+}
+
+/* ------------------------------------------------------------------ */
+/* Application settings                                                */
+/* ------------------------------------------------------------------ */
+
+/** Settings owned by the host so the desktop, the demo and any future client
+ *  agree on them. Renderer-only preferences (theme, layout) stay local. */
+export interface AppSettings {
+  /** UI language tag (parity: pi-desktop i18n). */
+  language?: string;
+  /** Outbound network proxy (see network-proxy.ts). */
+  proxy?: NetworkProxySettings;
+  /** Update policy. */
+  updates?: {
+    autoCheck?: boolean;
+    /** Channel the app should follow, e.g. "latest". */
+    channel?: string;
+  };
+  /** Command shell used by `run_command` on Windows (parity: command shells). */
+  commandShell?: string;
+  /** Maximum model→tool round trips per turn. */
+  maxSteps?: number;
+}
+
+/* ------------------------------------------------------------------ */
+/* Session + model-config import                                       */
+/* ------------------------------------------------------------------ */
+
+export type ExternalAgentSource = "claude-code" | "codex" | "opencode" | "pi";
+
+export interface ExternalSessionSummary {
+  source: ExternalAgentSource;
+  externalId: string;
+  title: string;
+  projectPath: string | null;
+  model: string | null;
+  createdAt: number;
+  updatedAt: number;
+  messageCount: number | null;
+  /** Where the session was read from (for display + provenance). */
+  filePath: string;
+}
+
+export interface ImportScanResult {
+  sessions: ExternalSessionSummary[];
+  /** Sources that were looked at but had nothing to offer. */
+  skipped: Array<{ source: ExternalAgentSource; reason: string }>;
+}
+
+export interface ImportRunResult {
+  imported: number;
+  sessions: SessionMeta[];
+  errors: Array<{ externalId: string; error: string }>;
+}
+
+export interface ModelConfigImportEntry {
+  source: ExternalAgentSource;
+  label: string;
+  providerId: string;
+  providerLabel: string;
+  model: string;
+  baseUrl?: string;
+  filePath: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* Workspace file index (@ file references)                            */
+/* ------------------------------------------------------------------ */
+
+export interface FileIndexResult {
+  paths: string[];
+  /** True when the directory had more entries than the cap. */
+  truncated: boolean;
+  /** Milliseconds spent scanning (informational). */
+  elapsedMs: number;
+}
+
+/* ------------------------------------------------------------------ */
+/* In-app updates                                                      */
+/* ------------------------------------------------------------------ */
+
+export type UpdateStatus =
+  | "idle"
+  | "checking"
+  | "available"
+  | "downloading"
+  | "downloaded"
+  | "not-available"
+  | "error"
+  | "unsupported";
+
+export interface UpdateState {
+  status: UpdateStatus;
+  currentVersion: string;
+  availableVersion?: string;
+  releaseUrl?: string;
+  releaseNotes?: string;
+  /** 0-100 while downloading. */
+  progress?: number;
+  error?: string;
+  checkedAt?: number;
+  /** True when the build can self-update (electron-updater configured). */
+  canSelfUpdate: boolean;
+}
+
+/* ------------------------------------------------------------------ */
+/* Scratch directories                                                 */
+/* ------------------------------------------------------------------ */
+
+export interface ScratchInfo {
+  sessionId: string;
+  /** Absolute path of the per-session scratch directory. */
+  dir: string;
+  /** True when the directory exists on disk right now. */
+  exists: boolean;
 }
