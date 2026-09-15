@@ -129,10 +129,34 @@ export function readFileTool(project: string, args: Record<string, unknown>): st
     typeof maxRaw === "number" && Number.isFinite(maxRaw) && maxRaw > 0
       ? Math.min(Math.floor(maxRaw), MAX_READ_CHARS)
       : DEFAULT_MAX_CHARS;
-  let text = readFileSync(target, "utf8");
+  const fullText = readFileSync(target, "utf8");
+  const tag = contentTag(fullText);
+
+  const startLine =
+    typeof args.start_line === "number" && Number.isInteger(args.start_line) && args.start_line > 0
+      ? args.start_line
+      : undefined;
+  const endLine =
+    typeof args.end_line === "number" && Number.isInteger(args.end_line) && args.end_line > 0
+      ? args.end_line
+      : undefined;
+
+  if (startLine !== undefined || endLine !== undefined) {
+    const lines = fullText.split(/\r?\n/);
+    if (fullText.endsWith("\n") && lines[lines.length - 1] === "") {
+      lines.pop();
+    }
+    const totalLines = lines.length;
+    const start = startLine ? Math.max(1, Math.min(startLine, totalLines)) : 1;
+    const end = endLine ? Math.max(start, Math.min(endLine, totalLines)) : totalLines;
+    const slice = lines.slice(start - 1, end);
+    const numbered = slice.map((line, idx) => `${start + idx} | ${line}`).join("\n");
+    return `path: ${rel}#${tag} (lines ${start}-${end} of ${totalLines})\n---\n${numbered}`;
+  }
+
+  let text = fullText;
   const truncated = text.length > max;
   if (truncated) text = text.slice(0, max);
-  const tag = contentTag(text);
   const body = truncated ? `${text}\n… [truncated at ${max} characters]` : text;
   return `path: ${rel}#${tag}${truncated ? " (truncated)" : ""}\n---\n${body}`;
 }

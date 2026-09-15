@@ -16,6 +16,9 @@ import {
   safeJoin,
   writeFileTool,
 } from "./fs";
+import { patchFileTool } from "./patch";
+import { codeIntelTool } from "./intel";
+import { webFetchTool } from "./fetch";
 import { runShell } from "./shell";
 
 export interface ToolRunParams {
@@ -94,7 +97,7 @@ export class ToolRunner {
 
       // Snapshot the previous content before a write so Review can show
       // a diff and roll back afterwards.
-      const mutating = params.tool === "write_file" || params.tool === "edit_file";
+      const mutating = params.tool === "write_file" || params.tool === "edit_file" || params.tool === "patch_file";
       const snapshotBefore =
         mutating && typeof params.args.path === "string"
           ? readExistingFile(project, params.args.path)
@@ -126,12 +129,18 @@ export class ToolRunner {
         return writeFileTool(project, args);
       case "edit_file":
         return editFileTool(project, args);
+      case "patch_file":
+        return patchFileTool(project, args);
       case "glob":
         return globTool(project, args);
       case "grep":
         return grepTool(project, args);
       case "list_dir":
         return listDirTool(project, args);
+      case "code_intel":
+        return codeIntelTool(project, args);
+      case "web_fetch":
+        return webFetchTool(args);
       case "run_command":
         return (await runShell(project, args)).output;
       default: {
@@ -168,6 +177,9 @@ export class ToolRunner {
     if (tool.name === "edit_file" && typeof args.path === "string") {
       const count = Array.isArray(args.edits) ? args.edits.length : 0;
       return `edit_file → ${args.path} (${count} change${count === 1 ? "" : "s"})`;
+    }
+    if (tool.name === "patch_file" && typeof args.path === "string") {
+      return `patch_file → ${args.path}`;
     }
     const path = typeof args.path === "string" ? args.path : undefined;
     const command = typeof args.command === "string" ? args.command : undefined;

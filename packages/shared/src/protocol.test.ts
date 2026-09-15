@@ -26,13 +26,17 @@ describe("tool catalog", () => {
     expect([...builtinToolNames()].sort()).toEqual([
       "Task",
       "ask_user",
+      "batch_tasks",
+      "code_intel",
       "edit_file",
       "glob",
       "grep",
       "list_dir",
+      "patch_file",
       "read_file",
       "run_command",
       "submit_plan",
+      "web_fetch",
       "write_file",
     ]);
   });

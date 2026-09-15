@@ -16,7 +16,7 @@ function collectEdits(messages: ChatMessage[]): Array<{ call: ToolCall; ok: bool
   for (const m of messages) {
     if (m.role !== "assistant") continue;
     for (const call of m.toolCalls ?? []) {
-      if (call.name !== "write_file") continue;
+      if (call.name !== "write_file" && call.name !== "edit_file" && call.name !== "patch_file") continue;
       const result = toolMessageToResult(toolByCall.get(call.id));
       edits.push({ call, ok: result ? result.ok : null, messageId: m.id });
     }
@@ -32,9 +32,11 @@ function collectFiles(messages: ChatMessage[]): Array<{ path: string; reads: num
       const a = (call.arguments ?? {}) as Record<string, unknown>;
       const p = a.path ?? a.file;
       if (typeof p !== "string" || !p) continue;
-      if (call.name !== "read_file" && call.name !== "write_file") continue;
+      const isRead = call.name === "read_file" || call.name === "code_intel";
+      const isWrite = call.name === "write_file" || call.name === "edit_file" || call.name === "patch_file";
+      if (!isRead && !isWrite) continue;
       const entry = map.get(p) ?? { reads: 0, writes: 0 };
-      if (call.name === "read_file") entry.reads += 1;
+      if (isRead) entry.reads += 1;
       else entry.writes += 1;
       map.set(p, entry);
     }
