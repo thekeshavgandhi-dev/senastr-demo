@@ -32,13 +32,36 @@ describe("tool catalog", () => {
       "glob",
       "grep",
       "list_dir",
+      "memory",
       "patch_file",
       "read_file",
       "run_command",
       "submit_plan",
+      "think",
+      "todo_write",
+      "use_skill",
+      "verify",
       "web_fetch",
       "write_file",
     ]);
+  });
+
+  it("keeps tool descriptions tight enough for the model to hold in context", () => {
+    // Descriptions are shipped verbatim on every request; a runaway catalog
+    // silently eats the budget the task itself needs.
+    const total = BUILTIN_TOOLS.reduce((sum, t) => sum + t.description.length, 0);
+    expect(total).toBeLessThan(9_000);
+  });
+
+  it("gives every tool a typed parameter object with a description", () => {
+    for (const tool of BUILTIN_TOOLS) {
+      expect(tool.parameters.type).toBe("object");
+      const props = tool.parameters.properties as Record<string, { description?: string }>;
+      for (const [name, schema] of Object.entries(props)) {
+        expect(typeof name).toBe("string");
+        expect(schema.description?.trim().length ?? 0).toBeGreaterThan(0);
+      }
+    }
   });
 });
 

@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import type { ChatMessage, ToolCall, ToolResult } from "@senastr/shared";
+import type { ChatMessage, TodoItem, ToolCall, ToolResult } from "@senastr/shared";
 import type { SenastrStore, StreamState } from "../hooks/useSenastr";
 import { toolMessageToResult } from "../hooks/useSenastr";
 import { projectDisplayName } from "../lib/prefs";
@@ -261,6 +261,7 @@ export const Transcript = memo(function Transcript({ store }: { store: SenastrSt
             </div>
           );
         })}
+        {store.todos.length > 0 ? <TaskList todos={store.todos} /> : null}
         {store.lastStopReason && store.lastStopReason !== "stop" && !store.busy && (
           <TurnOutcome store={store} />
         )}
@@ -275,14 +276,44 @@ export const Transcript = memo(function Transcript({ store }: { store: SenastrSt
   );
 });
 
+/** The agent's live task list, streamed from `todo_write` calls. */
+function TaskList({ todos }: { todos: TodoItem[] }) {
+  const done = todos.filter((t) => t.status === "completed").length;
+  return (
+    <div className="agent-task-list" aria-label="Agent task list">
+      <div className="agent-task-list-head">
+        <span>Tasks</span>
+        <b>
+          {done}/{todos.length}
+        </b>
+      </div>
+      <ol>
+        {todos.map((todo) => (
+          <li key={todo.id} className={cx("agent-task", todo.status)}>
+            <span className="agent-task-mark" aria-hidden>
+              {todo.status === "completed" ? "✓" : todo.status === "in_progress" ? "•" : ""}
+            </span>
+            <span className="agent-task-text">{todo.content}</span>
+            {todo.notes ? <span className="agent-task-notes">{todo.notes}</span> : null}
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
 function TurnOutcome({ store }: { store: SenastrStore }) {
   const reason = store.lastStopReason;
-  if (reason !== "aborted" && reason !== "max-steps") return null;
+  if (reason !== "aborted" && reason !== "max-steps" && reason !== "stuck") return null;
   return (
     <div className="turn-outcome">
       <IconAlert size={14} />
       <span>
-        {reason === "aborted" ? "Turn stopped." : "Stopped: step limit reached."}
+        {reason === "aborted"
+          ? "Turn stopped."
+          : reason === "stuck"
+            ? "Stopped: the agent repeated a failing call. Re-read the transcript, then retry with a narrower instruction."
+            : "Stopped: step limit reached."}
       </span>
       <button type="button" className="turn-outcome-btn" onClick={() => store.retryLast()}>
         <IconRefresh size={12} />

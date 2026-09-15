@@ -4,6 +4,7 @@ import type { SenastrStore } from "../hooks/useSenastr";
 import { api, cleanError } from "../lib/api";
 import { prefs, type AgentMode, type PermissionMode, type ThemePref } from "../lib/prefs";
 import { InstructionsSettings } from "./settings/InstructionsSettings";
+import { MemorySettings } from "./settings/MemorySettings";
 import { McpSettings } from "./settings/McpSettings";
 import { ScheduledSettings } from "./settings/ScheduledSettings";
 import { SubagentsSettings } from "./settings/SubagentsSettings";
@@ -32,6 +33,7 @@ const NAV: Array<{
   { id: "skills", label: "Skills", title: "Skills", description: "Reusable instructions for global and project workflows", icon: "book", group: "Agent", keywords: "prompt instructions markdown capability" },
   { id: "subagents", label: "Subagents", title: "Subagents", description: "Delegate personalities the agent can spawn via the Task tool", icon: "sparkles", group: "Agent", keywords: "subagent delegate task background specialist personality" },
   { id: "instructions", label: "Instructions", title: "Instructions & memory", description: "Standing instructions injected into every turn", icon: "edit", group: "Agent", keywords: "memory instructions standing global project context" },
+  { id: "memory", label: "Memory", title: "Agent memory", description: "Durable notes the agent keeps across sessions", icon: "book", group: "Agent", keywords: "memory notes recall durable remember knowledge topics" },
   { id: "scheduled", label: "Scheduled", title: "Scheduled tasks", description: "Headless agent runs on a cadence", icon: "terminal", group: "Agent", keywords: "schedule cron recurring automation nightly task" },
   { id: "mcp", label: "MCP", title: "MCP servers", description: "Connect local commands and Streamable HTTP tool servers", icon: "server", group: "Agent", keywords: "model context protocol tools stdio http server" },
   { id: "plugins", label: "Extensions", title: "Extensions", description: "Install and manage local agent plugins", icon: "plug", group: "Agent", keywords: "plugins marketplace tools install local" },
@@ -57,6 +59,7 @@ export function SettingsView({ store }: { store: SenastrStore }) {
     skills: <SkillsSettings store={store} />,
     subagents: <SubagentsSettings store={store} />,
     instructions: <InstructionsSettings store={store} />,
+    memory: <MemorySettings store={store} />,
     scheduled: <ScheduledSettings store={store} />,
     mcp: <McpSettings store={store} />,
     plugins: <PluginsSettings store={store} />,

@@ -148,6 +148,13 @@ export const Methods = {
   projectGetContext: "project/get-context",
   projectSetContext: "project/set-context",
 
+  memoryList: "memory/list",
+  memorySearch: "memory/search",
+  memoryRead: "memory/read",
+  memoryWrite: "memory/write",
+  memoryForget: "memory/forget",
+  memoryPrompt: "memory/prompt",
+
   pluginList: "plugin/list",
   pluginInstall: "plugin/install",
   pluginUninstall: "plugin/uninstall",

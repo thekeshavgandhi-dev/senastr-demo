@@ -29,6 +29,7 @@ import {
   type AskAnswers,
   type ChatMessage,
   type GitInfo,
+  type MemoryScope,
   type ModelRef,
   type PermissionRequest,
   type ProjectContext,
@@ -131,6 +132,23 @@ class RpcHostBridge implements HostBridge {
 
   getProjectContext(projectPath: string | null) {
     return this.client.request<ProjectContext>(Methods.projectGetContext, { projectPath });
+  }
+
+  /**
+   * Durable memory for the prompt: index + passages recalled for the request.
+   * Best effort — a memory miss must never break a turn.
+   */
+  async memoryPrompt(projectPath: string, query: string, limit?: number): Promise<string> {
+    try {
+      const res = await this.client.request<{ block: string }>(Methods.memoryPrompt, {
+        projectPath,
+        query,
+        limit,
+      });
+      return res?.block ?? "";
+    } catch {
+      return "";
+    }
   }
 
   resolveModel(ref: ModelRef) {
@@ -558,6 +576,14 @@ function setupIpc(): void {
   ipcMain.handle("review/get", (_e, p) => req(Methods.reviewGet, p));
   ipcMain.handle("review/rollback", (_e, p) => req(Methods.reviewRollback, p));
   ipcMain.handle("review/purge", (_e, p) => req(Methods.reviewPurge, p));
+
+  ipcMain.handle("memory/list", (_e, p: { projectPath?: string | null; scope?: MemoryScope }) =>
+    req(Methods.memoryList, p ?? {}),
+  );
+  ipcMain.handle("memory/search", (_e, p) => req(Methods.memorySearch, p));
+  ipcMain.handle("memory/read", (_e, p) => req(Methods.memoryRead, p));
+  ipcMain.handle("memory/write", (_e, p) => req(Methods.memoryWrite, p));
+  ipcMain.handle("memory/forget", (_e, p) => req(Methods.memoryForget, p));
 
   ipcMain.handle("project/get-context", (_e, p: { projectPath?: string | null }) =>
     req(Methods.projectGetContext, p ?? {}),

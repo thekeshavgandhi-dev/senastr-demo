@@ -1,5 +1,6 @@
 export {
   AgentRuntime,
+  autoActivateSkills,
   withActiveSkills,
   withProjectContext,
   PLAN_MODE_PROMPT,
@@ -30,6 +31,27 @@ export {
   MAX_MESSAGE_CHARS,
   type CompactResult,
 } from "./context";
+export {
+  composeSystemPrompt,
+  renderSkillManifests,
+  renderAlwaysSkills,
+  renderAutoSkills,
+  renderTodos,
+  renderWarnings,
+  BASE_PROTOCOL,
+  PLAN_MODE_BLOCK,
+  DELEGATION_REPORT_CONTRACT,
+  type SystemPromptParts,
+} from "./prompt";
+export {
+  repairToolCall,
+  closestName,
+  describeRepairs,
+  levenshtein,
+  tryParseJsonObject,
+  type ToolCallRepair,
+} from "./tool-validation";
+export { SUMMARIZE_SYSTEM, renderTranscriptForSummary } from "./summarize";
 export { defaultSystemPrompt, toAnthropicMessages, toOpenAIMessages } from "./messages";
 export type {
   AgentOptions,

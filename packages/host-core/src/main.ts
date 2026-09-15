@@ -15,6 +15,7 @@ import { SubagentService } from "./subagents";
 import { ScheduledService } from "./scheduled";
 import { ReviewStore } from "./review";
 import { InstructionService } from "./instructions";
+import { MemoryService } from "./memory";
 import { registerMethods } from "./methods";
 
 /**
@@ -66,7 +67,8 @@ function main(): void {
   const scheduled = new ScheduledService(dataDir);
   const review = new ReviewStore(join(dataDir, "review"));
   const instructionService = new InstructionService(dataDir);
-  const tools = new ToolRunner(sessions, permissions, plugins, mcp, review);
+  const memory = new MemoryService(dataDir);
+  const tools = new ToolRunner(sessions, permissions, plugins, mcp, review, memory, skills);
 
   registerMethods({
     server,
@@ -82,6 +84,7 @@ function main(): void {
     scheduled,
     review,
     instructions: instructionService,
+    memory,
   });
 
   let shuttingDown = false;

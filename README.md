@@ -48,7 +48,10 @@ endpoint you configure.
                     │ Agent runtime (packages/agent-runtime)    │
                     │  • model → tool-call → result loop        │
                     │  • OpenAI/Responses, Anthropic + Gemini   │
-                    │  • streaming events, skills, abort        │
+                    │  • streaming events, abort, compaction    │
+                    │  • skills (progressive disclosure)        │
+                    │  • memory injection, verification gate    │
+                    │  • parallel tools + read-only subagents   │
                     └─────────────────────────────┬─────────────┘
                                                   │ NDJSON JSON-RPC
                                                   │ over stdio
@@ -56,7 +59,8 @@ endpoint you configure.
                     │ Host core sidecar (packages/host-core)    │
                     │  • sessions + transcripts (local files)   │
                     │  • providers + API keys (never rendered)  │
-                    │  • tools: read/write/list/shell           │
+                    │  • tools: read/write/list/shell/verify    │
+                    │  • durable project memory (Markdown)      │
                     │  • permission gateway (grants, 120s deny) │
                     │  • plugins, skills + MCP registry/runtime │
                     └───────────────────────────────────────────┘
@@ -70,6 +74,26 @@ Key properties:
 - **Storage ownership.** The host core is the only process that touches disk.
   The renderer sees only masked views (no API keys, ever).
 - **Desktop experience.** Project-grouped sessions with pin/archive/fork, Build/Plan agent modes, Ask/Accept-edits/Auto permission modes, a prompt queue, @file autocomplete, file attachments, a Review/Files/Details work panel, global search (Ctrl+K), keyboard shortcuts, and light/dark themes.
+- **Progressive skills.** Only a one-line manifest per skill reaches the
+  system prompt; the body is loaded on demand with `use_skill` and a skill's
+  bundled files with `read_skill_resource`, both behind per-turn budgets.
+  Skills are auto-matched against the task or can be pinned `always: true`.
+- **Durable memory.** The agent keeps a curated Markdown memory under
+  `<project>/.senastr/memory/` (`MEMORY.md` index + topic files) and a compact
+  view of it is injected into every system prompt, so conventions, decisions
+  and user preferences survive across sessions.
+- **Verification gate.** A turn that changed files without running the
+  project's checks gets nudged once before it may end; `verify` auto-detects
+  the checks from `package.json`, lockfiles and tool configs and runs them
+  cheap-first with a bounded budget.
+- **Parallel and delegated work.** Independent reads run concurrently (writes
+  stay serialised), `Task` spawns read-only subagents under a reporting
+  contract, and `batch_tasks` runs a dependency graph of subagents, executing
+  independent waves in parallel.
+- **Loop safety.** Repeated identical failures warn, then stop the turn with
+  `stopReason: "stuck"`; long transcripts are summarised into a checkpoint
+  instead of being replayed; malformed tool arguments are repaired (with the
+  repair reported) rather than rejected.
 - **Permission layer.** `read` tools run freely; `write`/`exec` tools need a
   grant or an interactive approval. Unanswered prompts are **denied after
   120s**. Grants are per tool per session (or "always") and revocable.
@@ -176,13 +200,14 @@ senastr is a from-scratch implementation of the architecture of
 [PI-Desktop](https://github.com/vastsa/pi-desktop). `docs/pi-desktop-parity.md`
 records a feature-by-feature audit against it, with the evidence for each
 claim; `scripts/verify-parity.mjs` reproduces the checks against a live
-host-core (currently 68 passing, 0 failing, 6 known gaps).
+host-core (currently 67 passing, 0 failing, 7 known gaps).
 
 Shipped: the agent loop and its supervision, the ten builtin tools including
 tag-verified line-anchored edits, glob and grep, the permission layer, project
 confinement (lexical *and* through symlinks), AES-256-GCM credential encryption
-behind a keychain-wrapped key, context compaction with checkpoints, durable
-sidecar state, plan mode with server-side denial, subagents, skills, plugins,
+behind a keychain-wrapped key, context compaction with summarised checkpoints,
+durable sidecar state, plan mode with server-side denial, subagents, skills,
+plugins,
 MCP, scheduled tasks, review/rollback, the work panel, a sandboxed renderer, a
 tray, electron-builder packaging with a bundled sidecar, and CI.
 

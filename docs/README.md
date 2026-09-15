@@ -8,6 +8,8 @@
 - [ADR 0005 — Permission layer](adr/0005-permission-layer.md)
 - [ADR 0006 — Declarative plugins](adr/0006-declarative-plugins.md)
 - [ADR 0007 — UI stack](adr/0007-ui-stack.md)
+- [ADR 0008 — Advanced agent capabilities: progressive skills, durable memory,
+  verification and delegation](adr/0008-advanced-agent-capabilities.md)
 
 ## Protocol reference (living doc)
 
@@ -17,6 +19,11 @@ The authoritative protocol reference is code:
 - Wire shapes (sessions, providers, permissions, plugins, events):
   `packages/shared/src/models.ts`
 - Builtin tool catalog: `packages/shared/src/tools.ts`
+- Bundled skill library: `packages/shared/src/builtin-skills.ts`
+- Prompt assembly: `packages/agent-runtime/src/prompt.ts`
+- Memory store + tool: `packages/host-core/src/memory.ts`,
+  `packages/host-core/src/tools/memory.ts`
+- Check detection + runner: `packages/host-core/src/tools/verify.ts`
 - Host method implementations: `packages/host-core/src/methods.ts`
 - Agent events: `AgentEvent` in `packages/shared/src/models.ts`
 

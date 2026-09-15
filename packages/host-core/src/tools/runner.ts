@@ -5,6 +5,8 @@ import type { SessionStore } from "../sessions";
 import type { PluginService } from "../plugins";
 import type { McpService } from "../mcp";
 import type { ReviewStore } from "../review";
+import type { MemoryService } from "../memory";
+import type { SkillService } from "../skills";
 import {
   deleteFileTool,
   editFileTool,
@@ -20,6 +22,9 @@ import { patchFileTool } from "./patch";
 import { codeIntelTool } from "./intel";
 import { webFetchTool } from "./fetch";
 import { runShell } from "./shell";
+import { verifyProject } from "./verify";
+import { memoryTool } from "./memory";
+import { useSkillTool } from "./skill";
 
 export interface ToolRunParams {
   sessionId: string;
@@ -40,6 +45,8 @@ export class ToolRunner {
     private readonly plugins: PluginService,
     private readonly mcp?: McpService,
     private readonly review?: ReviewStore,
+    private readonly memory?: MemoryService,
+    private readonly skills?: SkillService,
   ) {}
 
   async listTools(sessionId?: string): Promise<ToolDefinition[]> {
@@ -143,6 +150,18 @@ export class ToolRunner {
         return webFetchTool(args);
       case "run_command":
         return (await runShell(project, args)).output;
+      case "verify": {
+        const result = await verifyProject(project, args);
+        return result.output;
+      }
+      case "memory": {
+        if (!this.memory) throw new RpcError(ErrorCodes.TOOL_NOT_FOUND, "memory store is unavailable");
+        return memoryTool(this.memory, project, args);
+      }
+      case "use_skill": {
+        if (!this.skills) throw new RpcError(ErrorCodes.TOOL_NOT_FOUND, "skill store is unavailable");
+        return useSkillTool(this.skills, project, args);
+      }
       default: {
         if (tool.source === "mcp" && this.mcp) {
           return this.mcp.callTool(tool.name, args, project);

@@ -7,6 +7,7 @@ import {
   SENASTR_VERSION,
   type GrantScope,
   type McpServerInput,
+  type MemoryScope,
   type ProjectContext,
   type ProviderConfig,
   type ProviderDiscoveryInput,
@@ -29,6 +30,7 @@ import type { SubagentService } from "./subagents";
 import type { ScheduledService } from "./scheduled";
 import type { ReviewStore } from "./review";
 import type { InstructionService } from "./instructions";
+import type { MemoryService } from "./memory";
 
 export interface MethodContext {
   server: RpcServer;
@@ -44,6 +46,7 @@ export interface MethodContext {
   scheduled: ScheduledService;
   review: ReviewStore;
   instructions: InstructionService;
+  memory: MemoryService;
 }
 
 /**
@@ -52,7 +55,7 @@ export interface MethodContext {
  * matter who is on the other end (desktop, demo script, tests).
  */
 export function registerMethods(ctx: MethodContext): void {
-  const { server, sessions, providers, permissions, tools, plugins, skills, mcp, subagents, scheduled, review, instructions } = ctx;
+  const { server, sessions, providers, permissions, tools, plugins, skills, mcp, subagents, scheduled, review, instructions, memory } = ctx;
 
   // --- host -----------------------------------------------------------------
   server.onMethod(Methods.hostPing, () => ({
@@ -164,6 +167,81 @@ export function registerMethods(ctx: MethodContext): void {
       const id = requireString(params, "id");
       skills.delete(id, params);
       return { ok: true };
+    },
+  );
+
+  // --- memory ----------------------------------------------------------------
+  server.onMethod(Methods.memoryList, (params?: { projectPath?: string | null; scope?: MemoryScope }) => {
+    const projectPath = typeof params?.projectPath === "string" ? params.projectPath : null;
+    const scopes: MemoryScope[] =
+      params?.scope === "global" ? ["global"] : params?.scope === "project" ? ["project"] : ["project", "global"];
+    return scopes
+      .filter((scope) => scope === "global" || !!projectPath)
+      .map((scope) => memory.index({ scope, projectPath }));
+  });
+
+  server.onMethod(
+    Methods.memorySearch,
+    (params: { query: string; projectPath?: string | null; limit?: number; scope?: MemoryScope }) => {
+      const query = requireString(params, "query");
+      const projectPath = typeof params?.projectPath === "string" ? params.projectPath : null;
+      if (params?.scope === "global" || params?.scope === "project") {
+        return memory.search(query, { scope: params.scope, projectPath }, params?.limit);
+      }
+      return memory.recall(query, projectPath, params?.limit);
+    },
+  );
+
+  server.onMethod(
+    Methods.memoryRead,
+    (params: { key: string; projectPath?: string | null; scope?: MemoryScope }) => {
+      const key = requireString(params, "key");
+      const projectPath = typeof params?.projectPath === "string" ? params.projectPath : null;
+      const scope: MemoryScope = params?.scope === "global" ? "global" : projectPath ? "project" : "global";
+      const entry = memory.read({ scope, projectPath }, key);
+      return { entry };
+    },
+  );
+
+  server.onMethod(
+    Methods.memoryWrite,
+    (params: {
+      key: string;
+      content: string;
+      projectPath?: string | null;
+      scope?: MemoryScope;
+      mode?: "replace" | "append";
+      action?: "write" | "log";
+    }) => {
+      const key = requireString(params, "key");
+      const content = typeof params?.content === "string" ? params.content : "";
+      const projectPath = typeof params?.projectPath === "string" ? params.projectPath : null;
+      const scope: MemoryScope = params?.scope === "global" ? "global" : projectPath ? "project" : "global";
+      const ref = { scope, projectPath };
+      const entry =
+        params?.action === "log"
+          ? memory.appendLog(ref, content)
+          : memory.write(ref, key, content, params?.mode === "append" ? "append" : "replace");
+      return { entry, index: memory.index(ref).index };
+    },
+  );
+
+  server.onMethod(
+    Methods.memoryPrompt,
+    (params: { projectPath?: string | null; query?: string; limit?: number }) => {
+      const projectPath = typeof params?.projectPath === "string" ? params.projectPath : null;
+      const query = typeof params?.query === "string" ? params.query : "";
+      return { block: memory.promptBlock(projectPath, query, params?.limit) };
+    },
+  );
+
+  server.onMethod(
+    Methods.memoryForget,
+    (params: { key: string; projectPath?: string | null; scope?: MemoryScope }) => {
+      const key = requireString(params, "key");
+      const projectPath = typeof params?.projectPath === "string" ? params.projectPath : null;
+      const scope: MemoryScope = params?.scope === "global" ? "global" : projectPath ? "project" : "global";
+      return { removed: memory.forget({ scope, projectPath }, key) };
     },
   );
 

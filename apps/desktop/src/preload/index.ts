@@ -82,6 +82,13 @@ const api = {
     rollback: (params: unknown) => invoke("review/rollback", params),
     purge: (sessionId: string) => invoke("review/purge", { sessionId }),
   },
+  memory: {
+    list: (params: unknown = {}) => invoke("memory/list", params),
+    search: (params: unknown) => invoke("memory/search", params),
+    read: (params: unknown) => invoke("memory/read", params),
+    write: (params: unknown) => invoke("memory/write", params),
+    forget: (params: unknown) => invoke("memory/forget", params),
+  },
   projectCtx: {
     getContext: (projectPath?: string | null) => invoke("project/get-context", { projectPath }),
     setContext: (params: unknown) => invoke("project/set-context", params),

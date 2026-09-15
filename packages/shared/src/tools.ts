@@ -169,6 +169,173 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
     source: "builtin",
   },
   {
+    name: "use_skill",
+    description:
+      "Load a skill's full instructions (and optionally a bundled resource) into context. Skills are listed in the system " +
+      "prompt by name + description only; call this when a skill matches the task at hand. Returns the skill body, an index " +
+      "of its bundled resources, and the file paths it applies to. Pass `resource` to read one of those bundled files " +
+      "(references/, scripts/, assets/). Call it without arguments to list what is available.",
+    parameters: {
+      type: "object",
+      properties: {
+        skill: {
+          type: "string",
+          description: "Skill id or name, exactly as listed in the system prompt. Omit to list all skills.",
+        },
+        resource: {
+          type: "string",
+          description:
+            "Optional bundled file to read, relative to the skill directory (e.g. `references/api.md`). Only valid together with `skill`.",
+        },
+      },
+    },
+    risk: "read",
+    source: "builtin",
+  },
+  {
+    name: "memory",
+    description:
+      "Durable, cross-session memory stored as Markdown on this machine. Use it to persist decisions, conventions, " +
+      "architecture notes, user preferences, bug root causes and anything the next session would otherwise have to " +
+      "rediscover; and to recall them instead of re-reading the whole codebase. Actions: " +
+      "`search` (find notes by keyword), `read` (read a topic by key, or `index` for the table of contents), " +
+      "`write` (create or update a topic: key + content, mode `replace` or `append`), " +
+      "`log` (append a timestamped line to today's work log), `list` (all topics with summaries), `forget` (delete a topic). " +
+      "Write memory when you learn something durable; search it before claiming a task is impossible or before re-deriving context.",
+    parameters: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["search", "read", "write", "list", "log", "forget"],
+          description: "Which operation to perform (default `search`).",
+        },
+        key: {
+          type: "string",
+          description:
+            "Topic slug for read/write/forget (e.g. `auth-flow`), or the search query when action is `search`. Use `index` with `read` for the table of contents.",
+        },
+        content: {
+          type: "string",
+          description: "Markdown body for `write`, or the log line for `log`.",
+        },
+        mode: {
+          type: "string",
+          enum: ["replace", "append"],
+          description: "`replace` (default) overwrites the topic; `append` adds to the end of it.",
+        },
+        scope: {
+          type: "string",
+          enum: ["project", "global"],
+          description: "Which store to use. Defaults to the current project.",
+        },
+        limit: {
+          type: "number",
+          description: "Max search hits (default 8, max 25).",
+        },
+      },
+      required: ["action"],
+    },
+    risk: "write",
+    source: "builtin",
+  },
+  {
+    name: "todo_write",
+    description:
+      "Create or update the structured task list for the current turn. Use it for any task with more than two or three " +
+      "distinct steps: decompose the work first, mark exactly one item `in_progress` at a time, and mark items " +
+      "`completed` as soon as they are done (never batch completions). Send the COMPLETE list every call — it replaces " +
+      "the previous one. The list is shown to the user and re-injected into your context each step.",
+    parameters: {
+      type: "object",
+      properties: {
+        todos: {
+          type: "array",
+          description: "The full, ordered replacement list.",
+          items: {
+            type: "object",
+            properties: {
+              id: {
+                type: "string",
+                description: "Stable id: reuse the id from the current list to update an item (`t1`, `t2`, …).",
+              },
+              content: {
+                type: "string",
+                description: "Imperative description of the step, e.g. `Add retry to the HTTP client`.",
+              },
+              status: {
+                type: "string",
+                enum: ["pending", "in_progress", "completed"],
+                description: "New status of the item.",
+              },
+              notes: {
+                type: "string",
+                description: "Optional finding, blocker or file reference discovered while working on it.",
+              },
+            },
+            required: ["id", "content", "status"],
+          },
+        },
+      },
+      required: ["todos"],
+    },
+    risk: "read",
+    source: "builtin",
+  },
+  {
+    name: "think",
+    description:
+      "Record a structured reasoning step in the transcript. Use it before a hard or irreversible decision: lay out the " +
+      "options, the evidence you have, the risk of each, and the conclusion you reached. This is a scratchpad — it " +
+      "changes nothing on disk, but it is kept in context so later steps can build on it. Cheaper and more reliable " +
+      "than repeating the same reasoning across several tool calls.",
+    parameters: {
+      type: "object",
+      properties: {
+        thought: {
+          type: "string",
+          description: "The reasoning step: situation, options considered, evidence, decision, and what would falsify it.",
+        },
+        step: {
+          type: "string",
+          description: "Short label for this step, e.g. `choose-cache-layer`.",
+        },
+      },
+      required: ["thought"],
+    },
+    risk: "read",
+    source: "builtin",
+  },
+  {
+    name: "verify",
+    description:
+      "Run this project's real checks and report pass/fail. Auto-detects the toolchain from the repository " +
+      "(package.json scripts, Makefile, pyproject.toml, Cargo.toml, go.mod, mvn/gradle) and runs typecheck, lint, " +
+      "build and tests as applicable. Call it after every meaningful change and always before declaring the task " +
+      "done. Pass `command` to run one specific command instead. Never report success without a green run of this tool.",
+    parameters: {
+      type: "object",
+      properties: {
+        command: {
+          type: "string",
+          description:
+            "Optional explicit command to run instead of the detected suite (e.g. `pnpm vitest run src/auth`).",
+        },
+        only: {
+          type: "string",
+          enum: ["auto", "typecheck", "lint", "test", "build"],
+          description: "Run just one category (default `auto` = all detected checks).",
+        },
+        timeout_ms: {
+          type: "number",
+          description: "Optional timeout in milliseconds for the whole run (default 300000, max 600000).",
+        },
+      },
+    },
+    risk: "exec",
+    source: "builtin",
+  },
+  {
     name: "write_file",
     description:
       "Create or overwrite a file inside the current project with the given content. Parent directories are created as needed.",
@@ -291,18 +458,33 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
   {
     name: "Task",
     description:
-      "Spawn a specialist subagent to handle a self-contained piece of work in the background (e.g. `architect`, `explorer`, `coder`, `tester`, `debugger`, `reviewer`, `terminal`, `writer`). Give a precise prompt with the files and context it needs; it returns a report. It cannot ask the user questions or spawn further subagents.",
+      "Delegate one self-contained piece of work to a specialist subagent (e.g. `architect`, `explorer`, `coder`, " +
+      "`tester`, `debugger`, `reviewer`, `terminal`, `writer`). The subagent gets the project tools, a fresh " +
+      "context of its own, and reports back a structured summary — so use it to keep your own context small and to " +
+      "parallelise independent work. Write a self-contained prompt: what to do, which files to look at, what " +
+      "constraints apply, and what the report must contain. It cannot ask the user questions or spawn further subagents.",
     parameters: {
       type: "object",
       properties: {
         description: { type: "string", description: "Short (3-5 word) description of the delegated work." },
         prompt: {
           type: "string",
-          description: "Full self-contained instructions for the subagent, including relevant file paths and what to report back.",
+          description:
+            "Full self-contained instructions for the subagent, including relevant file paths, the acceptance criteria, and what to report back.",
         },
         subagent: {
           type: "string",
-          description: "Name of a specialist subagent (`architect`, `explorer`, `coder`, `tester`, `debugger`, `reviewer`, `terminal`, `writer`, or custom). Omit for the default agent.",
+          description:
+            "Name of a specialist subagent (`architect`, `explorer`, `coder`, `tester`, `debugger`, `reviewer`, `terminal`, `writer`, or a custom one). Omit for the default agent.",
+        },
+        read_only: {
+          type: "boolean",
+          description: "Restrict the subagent to read-only tools (investigation, review, planning). Default false.",
+        },
+        context: {
+          type: "string",
+          description:
+            "Extra context to hand over verbatim (relevant snippets, decisions already made, memory notes). The subagent does not see your transcript.",
         },
       },
       required: ["description", "prompt"],
@@ -313,25 +495,42 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
   {
     name: "batch_tasks",
     description:
-      "Spawn multiple specialist subagents in parallel to execute concurrent subtasks (e.g. concurrent exploration, multi-file investigation, or parallel sub-task generation). Returns a synthesized multi-agent report.",
+      "Run several subagents as one coordinated batch. Independent tasks run concurrently; tasks with `depends_on` " +
+      "wait for their dependencies and receive their reports as context, so you can express a whole pipeline " +
+      "(explore → implement → test → review) in one call. Returns one synthesized report plus per-task status.",
     parameters: {
       type: "object",
       properties: {
         tasks: {
           type: "array",
-          description: "List of subtasks to execute concurrently in parallel.",
+          description: "2-8 subtasks. Each needs a unique `id` when other tasks depend on it.",
           items: {
             type: "object",
             properties: {
+              id: {
+                type: "string",
+                description: "Short unique id for this task (e.g. `explore`, `impl`, `test`). Required if anything depends on it.",
+              },
               description: { type: "string", description: "Short description of the subtask." },
-              prompt: { type: "string", description: "Detailed instructions for the subagent." },
+              prompt: { type: "string", description: "Detailed, self-contained instructions for the subagent." },
               subagent: {
                 type: "string",
                 description: "Specialist subagent personality (`architect`, `explorer`, `coder`, `tester`, `debugger`, `reviewer`, `terminal`, `writer`, or custom).",
               },
+              depends_on: {
+                type: "array",
+                description: "Ids of tasks that must finish first. Their reports are appended to this task's context.",
+                items: { type: "string" },
+              },
+              read_only: { type: "boolean", description: "Restrict this subagent to read-only tools." },
+              context: { type: "string", description: "Extra context handed to this subagent verbatim." },
             },
             required: ["description", "prompt"],
           },
+        },
+        max_concurrency: {
+          type: "number",
+          description: "Max subagents running at once (default 4, max 8).",
         },
       },
       required: ["tasks"],

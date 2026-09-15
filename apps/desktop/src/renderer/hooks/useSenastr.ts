@@ -16,6 +16,7 @@ import type {
   SessionMode,
   ToolCall,
   ToolResult,
+  TodoItem,
   TurnStopReason,
   Usage,
 } from "@senastr/shared";
@@ -68,6 +69,7 @@ export function useSenastr() {
   const [pendingAsks, setPendingAsks] = useState<AskRequest[]>([]);
   const [planProposal, setPlanProposal] = useState<PlanProposal | null>(null);
   const [delegations, setDelegations] = useState<Record<string, DelegationSummary[]>>({});
+  const [todos, setTodos] = useState<TodoItem[]>([]);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [notices, setNotices] = useState<Notice[]>([]);
   const [version, setVersion] = useState("");
@@ -224,6 +226,7 @@ export function useSenastr() {
           inFlightSessionRef.current = ev.sessionId;
           setStreamSessionId(ev.sessionId);
           setBusy(true);
+          setTodos([]);
           setLastError(null);
           setStream({ text: "", blocks: [] });
           break;
@@ -257,6 +260,9 @@ export function useSenastr() {
         case "plan/proposed":
           setPlanProposal(ev.proposal);
           pushNotice("Plan ready for review", "info");
+          break;
+        case "todo/update":
+          setTodos(ev.todos ?? []);
           break;
         case "subagent/start":
         case "subagent/end":
@@ -881,6 +887,7 @@ export function useSenastr() {
     pendingAsks,
     planProposal,
     delegations,
+    todos,
     notifications,
     notices,
     version,

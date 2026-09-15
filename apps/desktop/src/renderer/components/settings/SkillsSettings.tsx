@@ -94,12 +94,17 @@ export function SkillsSettings({ store }: { store: SenastrStore }) {
           <div className={`capability-row ${skill.enabled ? "" : "off"}`} key={key}>
             <span className="capability-glyph"><SettingsIcon name="book" size={16} /></span>
             <div className="capability-copy">
-              <div><strong>{skill.name}</strong><span className="settings-badge">{skill.level}</span></div>
+              <div>
+                <strong>{skill.name}</strong><span className="settings-badge">{skill.level}</span>
+                {skill.source && skill.source !== "user" ? <span className="settings-badge subtle" title={skill.filePath ?? skill.dirPath ?? ""}>{sourceLabel(skill.source)}</span> : null}
+                {skill.always ? <span className="settings-badge subtle" title="Always injected in full">always</span> : null}
+              </div>
               <p>{skill.description || "No description"}</p>
+              {skill.dirPath ? <p className="capability-path">{skill.dirPath}{typeof skill.resources?.length === "number" && skill.resources.length ? ` · ${skill.resources.length} bundled file(s)` : ""}</p> : null}
             </div>
             <div className="capability-actions">
-              <IconButton icon="edit" label="Edit skill" disabled={busy === key} onClick={() => setEditor(skill)} />
-              {confirmDelete === key ? <button type="button" className="settings-confirm-delete" onClick={() => void remove(skill)}>Delete?</button> : <IconButton icon="trash" label="Delete skill" danger disabled={busy === key} onClick={() => void remove(skill)} />}
+              {isFileSkill(skill) ? null : <IconButton icon="edit" label="Edit skill" disabled={busy === key} onClick={() => setEditor(skill)} />}
+              {isFileSkill(skill) ? null : (confirmDelete === key ? <button type="button" className="settings-confirm-delete" onClick={() => void remove(skill)}>Delete?</button> : <IconButton icon="trash" label="Delete skill" danger disabled={busy === key} onClick={() => void remove(skill)} />)}
               <Toggle checked={skill.enabled} disabled={busy === key} label={`${skill.enabled ? "Disable" : "Enable"} ${skill.name}`} onChange={() => void toggle(skill)} />
             </div>
           </div>
@@ -112,7 +117,11 @@ export function SkillsSettings({ store }: { store: SenastrStore }) {
     <div className="settings-page-stack capability-page">
       <div className="capability-intro">
         <p>Skills are reusable Markdown instruction packs that guide the agent for a workflow, framework, or project convention.</p>
-        <span>Project skills are loaded after global skills and only for their matching project.</span>
+        <span>
+          Loaded progressively: the agent sees each skill&apos;s name and description, and loads the full instructions only when a
+          task matches. Skills are also discovered from disk — drop a <code>SKILL.md</code> into <code>.senastr/skills/&lt;name&gt;/</code>
+          {" "}(project) or <code>~/.senastr/skills/&lt;name&gt;/</code> (global) and it appears here, alongside <code>.claude/skills</code>.
+        </span>
       </div>
       <div className="capability-toolbar">
         <div className="settings-segments">
@@ -191,5 +200,14 @@ function SkillEditor({ skill, projectPath, initialLevel, onClose, onSaved, onErr
 }
 
 function skillKey(skill: SkillRecord): string { return `${skill.level}:${skill.projectPath ?? ""}:${skill.id}`; }
+function isFileSkill(skill: SkillRecord): boolean { return skill.source === "project-file" || skill.source === "global-file"; }
+function sourceLabel(source: NonNullable<SkillRecord["source"]>): string {
+  switch (source) {
+    case "builtin": return "built-in";
+    case "project-file": return "project file";
+    case "global-file": return "global file";
+    default: return "user";
+  }
+}
 function capitalize(value: string): string { return value.slice(0, 1).toUpperCase() + value.slice(1); }
 function projectName(path: string): string { return path.split(/[\\/]/).filter(Boolean).pop() ?? path; }
