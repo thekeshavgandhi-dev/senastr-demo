@@ -23,6 +23,19 @@ export {
 } from "./skill-files";
 export { detectChecks, verifyProject, packageManager, type CheckStep, type CheckOutcome } from "./tools/verify";
 export { McpService, mcpToolName, MASKED_SECRET, type McpQuery } from "./mcp";
+export { RevisionService } from "./revisions";
+export { ProjectService } from "./projects";
+export { SettingsService } from "./settings";
+export { StatsService } from "./stats";
+export { AttachmentService } from "./attachments";
+export { ScratchService } from "./scratch";
+export { indexProject, clearIndexCache } from "./fs-index";
+export {
+  scanExternalSessions,
+  convertExternalSession,
+  scanModelConfigs,
+  importedSessionId,
+} from "./importers";
 export { registerMethods, type MethodContext } from "./methods";
 export { JsonFileStore } from "./store";
 export {

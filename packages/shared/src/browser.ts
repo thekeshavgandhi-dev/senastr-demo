@@ -11,3 +11,7 @@ export * from "./protocol";
 export * from "./models";
 export * from "./tools";
 export * from "./provider-presets";
+export * from "./thinking-levels";
+export * from "./network-proxy";
+export * from "./commands";
+export * from "./composer-trigger";

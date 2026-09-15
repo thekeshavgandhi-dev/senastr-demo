@@ -137,9 +137,13 @@ describe("chat shell — composer and turns", () => {
     const session = await seedSession(backend, { title: "Modes" });
     await renderApp(backend);
 
-    fireEvent.click(screen.getByRole("button", { name: /Build: Agent can inspect, edit and run/ }));
+    // The mode chip is a menu trigger (Agent / Plan / Goal).
+    fireEvent.click(screen.getByRole("button", { name: /Agent: Inspect, edit and run/ }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: /^Plan/ }));
     // chip now reads Plan
-    await waitFor(() => expect(screen.getByText("Plan")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /Plan: Research first/ })).toBeInTheDocument(),
+    );
 
     fireEvent.change(screen.getByTestId("composer-input"), { target: { value: "plan something" } });
     fireEvent.click(screen.getByRole("button", { name: "Send (Enter)" }));
@@ -208,18 +212,11 @@ describe("chat shell — composer and turns", () => {
     });
   });
 
-  it("@ autocomplete lists touched files and applies the pick", async () => {
+  it("@ autocomplete lists project files and applies the pick", async () => {
     const backend = freshBackend();
-    await seedSession(backend, {
-      title: "Autocomplete",
-      messages: [
-        userMsg("do things"),
-        {
-          ...assistantMsg("ok"),
-          toolCalls: [{ id: nextId("call"), name: "read_file", arguments: { path: "src/app.ts" } }],
-        },
-      ],
-    });
+    // `@` completion is served by the host file index (fs/index), not by tool history.
+    backend.fileIndex = ["src/app.ts", "src/index.ts", "README.md"];
+    await seedSession(backend, { title: "Autocomplete" });
     await renderApp(backend);
 
     const input = screen.getByTestId("composer-input") as HTMLTextAreaElement;
@@ -971,6 +968,56 @@ describe("chat shell — settings dead-control regressions", () => {
     expect(screen.getByText("Project task")).toBeInTheDocument();
   }, 20_000);
 
+  it("usage settings render token history from the host", async () => {
+    const backend = freshBackend();
+    await seedSession(backend, { title: "Usage" });
+    backend.usageHistory = {
+      buckets: [
+        { bucket: "2026-09-13", inputTokens: 1200, outputTokens: 300, turns: 2 },
+        { bucket: "2026-09-14", inputTokens: 4000, outputTokens: 900, turns: 5 },
+      ],
+      totals: { inputTokens: 5200, outputTokens: 1200, turns: 7 },
+    };
+    await renderApp(backend);
+
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Usage" }));
+
+    expect(await screen.findByText("5,200")).toBeInTheDocument();
+    expect(screen.getByText("1,200")).toBeInTheDocument();
+    // One bar per bucket, labelled by the bucket tail.
+    await waitFor(() => expect(document.querySelectorAll(".usage-bar-wrap")).toHaveLength(2));
+    expect(screen.getByRole("img", { name: "Token usage per bucket" })).toBeInTheDocument();
+  }, 20_000);
+
+  it("network settings persist a custom proxy and reject a bad URL", async () => {
+    const backend = freshBackend();
+    await seedSession(backend, { title: "Proxy" });
+    await renderApp(backend);
+
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Network" }));
+
+    fireEvent.click(await screen.findByRole("radio", { name: "Custom" }));
+    const url = screen.getByLabelText("Proxy URL") as HTMLInputElement;
+    fireEvent.change(url, { target: { value: "http://127.0.0.1:7890" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(backend.hostSettings.proxy).toEqual({
+        mode: "custom",
+        url: "http://127.0.0.1:7890",
+      }),
+    );
+
+    // An unsupported scheme is rejected before it reaches the host.
+    const before = JSON.stringify(backend.hostSettings.proxy);
+    fireEvent.change(url, { target: { value: "ftp://nope" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.getByText(/unsupported proxy scheme/)).toBeInTheDocument());
+    expect(JSON.stringify(backend.hostSettings.proxy)).toBe(before);
+  }, 20_000);
+
   it("extensions toolbar shows a static scope label instead of a dead tab", async () => {
     const backend = freshBackend();
     await seedSession(backend);
@@ -982,5 +1029,44 @@ describe("chat shell — settings dead-control regressions", () => {
     const seg = (await screen.findByText("Installed")).closest(".settings-segments") as HTMLElement;
     expect(seg.querySelector("button")).toBeNull();
     expect(seg.querySelector(".segment-static")).toBeTruthy();
+  }, 20_000);
+});
+
+describe("chat shell — command palette", () => {
+  it("opens with Mod+Shift+P, lists host commands, and runs one", async () => {
+    const backend = freshBackend();
+    await seedSession(backend, { title: "Palette" });
+    await renderApp(backend);
+
+    fireEvent.keyDown(window, { key: "P", ctrlKey: true, shiftKey: true });
+    expect(await screen.findByRole("listbox", { name: "Command palette" })).toBeInTheDocument();
+    // Builtin catalogue comes from the host (command/list).
+    expect(await screen.findByText("Compact conversation context")).toBeInTheDocument();
+    expect(screen.getByText("/compact")).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() =>
+      expect(screen.queryByRole("listbox", { name: "Command palette" })).not.toBeInTheDocument(),
+    );
+  }, 20_000);
+
+  it("searching filters the catalogue and Enter runs the top hit", async () => {
+    const backend = freshBackend();
+    await seedSession(backend, { title: "Palette run" });
+    await renderApp(backend);
+
+    fireEvent.keyDown(window, { key: "P", ctrlKey: true, shiftKey: true });
+    const input = await screen.findByLabelText("Type a command…");
+    fireEvent.change(input, { target: { value: "compact" } });
+    // Server-side ranking narrows the catalogue to the compact command.
+    await waitFor(() =>
+      expect(screen.queryByText("Switch to Goal mode")).not.toBeInTheDocument(),
+    );
+    expect(await screen.findByText("Compact conversation context")).toBeInTheDocument();
+
+    fireEvent.keyDown(input, { key: "Enter" });
+    // `builtin.agent.compact` fans out to chat/compact on the host.
+    await waitFor(() => expect(backend.compactedSessions).toHaveLength(1));
+    expect(backend.compactedSessions[0]).toBe([...backend.sessions.keys()][0]);
   }, 20_000);
 });

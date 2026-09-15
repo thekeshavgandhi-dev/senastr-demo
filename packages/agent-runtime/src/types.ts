@@ -1,6 +1,9 @@
 import type {
   ChatMessage,
+  MessageAttachment,
   ModelRef,
+  NetworkProxySettings,
+  ThinkingLevel,
   ProjectContext,
   ProviderApiStyle,
   ProviderKind,
@@ -31,11 +34,23 @@ export interface ModelSpec {
   rateLimitPerMin?: number;
   /** Provider registry id; identifies the key pool / throttle bucket. */
   providerId?: string;
+  /** Reasoning level requested for this turn (parity: thinking levels). */
+  thinkingLevel?: ThinkingLevel;
+  /** Sampling temperature from the model configuration. */
+  temperature?: number;
+  /** Output token cap from the model configuration. */
+  maxOutputTokens?: number;
+  /** Context window from the model configuration (drives compaction). */
+  contextWindow?: number;
+  /** Outbound proxy for this provider's requests (see network-proxy.ts). */
+  proxy?: NetworkProxySettings;
 }
 
 /** Normalized stream events from any provider. */
 export type ProviderEvent =
   | { kind: "text"; delta: string }
+  /** Reasoning/thinking text, kept on a separate channel from the answer. */
+  | { kind: "reasoning"; delta: string }
   | { kind: "tool-call"; id: string; name: string; arguments: Record<string, unknown> }
   | { kind: "done"; usage?: Usage; finishReason?: string };
 
@@ -47,6 +62,9 @@ export interface ProviderChatParams {
   tools: ToolDefinition[];
   signal?: AbortSignal;
   maxTokens?: number;
+  /** Reasoning level for this request (from the session / model config). */
+  thinkingLevel?: ThinkingLevel;
+  temperature?: number;
 }
 
 export interface Provider {
@@ -75,6 +93,17 @@ export interface HostBridge {
   memoryPrompt?(projectPath: string, query: string, limit?: number): Promise<string>;
   /** Resolve a model reference to a runnable spec (API keys included). */
   resolveModel?(ref: ModelRef): Promise<ModelSpec>;
+  /** Hydrate an attachment's bytes for a multimodal request. */
+  readAttachment?(storeId: string): Promise<{ mimeType: string; base64: string; name: string }>;
+  /** Record one completed turn's token usage (parity: stats/getTokenUsageHistory). */
+  recordUsage?(record: {
+    sessionId: string;
+    providerId?: string;
+    model?: string;
+    inputTokens?: number;
+    outputTokens?: number;
+    stopReason?: string;
+  }): Promise<unknown>;
   runTool(req: { sessionId: string; tool: string; args: Record<string, unknown> }): Promise<ToolResult>;
 }
 
@@ -102,4 +131,4 @@ export interface AgentOptions {
   maxDelegationConcurrency?: number;
 }
 
-export type { ChatMessage, ToolCall, ToolDefinition, ToolResult, Usage, Session };
+export type { ChatMessage, MessageAttachment, ToolCall, ToolDefinition, ToolResult, Usage, Session };

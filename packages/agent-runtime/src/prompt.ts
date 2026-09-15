@@ -28,6 +28,7 @@ export interface SystemPromptParts {
   /** Standing instructions + memory from the user (global + project). */
   standingInstructions?: string;
   planMode?: boolean;
+  goalMode?: boolean;
   /** Skill bodies auto-loaded for this request (keyword match). */
   autoSkills?: SkillRecord[];
   /** Subagent run: the parent's brief and the reporting contract. */
@@ -156,12 +157,23 @@ export function composeSystemPrompt(parts: SystemPromptParts): string {
 
   if (parts.delegation) {
     blocks.push(renderDelegation(parts.delegation));
+  } else if (parts.goalMode) {
+    blocks.push(GOAL_MODE_BLOCK);
   } else if (parts.planMode) {
     blocks.push(PLAN_MODE_BLOCK);
   }
 
   return blocks.filter(Boolean).join("\n\n");
 }
+
+export const GOAL_MODE_BLOCK = [
+  "GOAL MODE: the user locked an objective and acceptance criteria instead of a plan.",
+  "- Work autonomously toward the stated outcome; you choose the path.",
+  "- Use every tool you need (read, write, run, delegate) — privileged calls still ask for approval.",
+  "- Verify your own work: run tests, re-read the result, and iterate until the outcome is met.",
+  "- Do not stop to ask how to proceed unless the objective itself is ambiguous or destructive.",
+  "- Finish with a short report: what changed, how you verified it, and anything left undone.",
+].join("\n");
 
 export const PLAN_MODE_BLOCK = [
   "PLAN MODE: you are planning, not executing.",

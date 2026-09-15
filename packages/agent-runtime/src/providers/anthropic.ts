@@ -2,7 +2,7 @@ import type { Provider, ProviderChatParams, ModelSpec, ProviderEvent } from "../
 import { toAnthropicMessages } from "../messages";
 import { parseSseLines, safeReadText, parseToolArgs } from "./openai";
 import { postToModel } from "./resilient";
-import type { Usage } from "@senastr/shared";
+import { anthropicThinkingBudgetFor, type Usage } from "@senastr/shared";
 
 /**
  * Anthropic Messages API streaming client (bare HTTP/SSE, no SDK).
@@ -12,11 +12,19 @@ export class AnthropicProvider implements Provider {
 
   async *streamChat(params: ProviderChatParams): AsyncIterable<ProviderEvent> {
     const base = (this.spec.baseUrl ?? "https://api.anthropic.com").replace(/\/+$/, "");
+    const maxTokens = params.maxTokens ?? 8192;
     const body: Record<string, unknown> = {
       model: params.model,
-      max_tokens: params.maxTokens ?? 8192,
+      max_tokens: maxTokens,
       messages: toAnthropicMessages(params.messages),
     };
+    if (typeof params.temperature === "number" && !params.thinkingLevel) {
+      body.temperature = params.temperature;
+    }
+    // Extended thinking: a token budget, and no temperature (the API rejects
+    // sampling parameters alongside thinking).
+    const budget = params.thinkingLevel ? anthropicThinkingBudgetFor(params.thinkingLevel, maxTokens) : null;
+    if (budget) body.thinking = { type: "enabled", budget_tokens: budget };
     if (params.system) body.system = params.system;
     if (params.tools.length > 0) {
       body.tools = params.tools.map((t) => ({
@@ -89,6 +97,8 @@ export class AnthropicProvider implements Provider {
           if (delta?.type === "text_delta" && typeof delta.text === "string") {
             block.text += delta.text;
             yield { kind: "text", delta: delta.text };
+          } else if (delta?.type === "thinking_delta" && typeof delta.thinking === "string") {
+            yield { kind: "reasoning", delta: delta.thinking };
           } else if (delta?.type === "input_json_delta" && typeof delta.partial_json === "string") {
             block.inputJson += delta.partial_json;
           }

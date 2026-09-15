@@ -3,6 +3,7 @@ import {
   ErrorCodes,
   SECRET_MASK,
   RpcError,
+  THINKING_LEVELS,
   type ProviderApiStyle,
   type ProviderConfig,
   type ProviderDiscoveryInput,
@@ -218,6 +219,7 @@ export function maskProvider(cfg: ProviderConfig): ProviderSummary {
     rateLimitPerMin: normalized.rateLimitPerMin,
     models: normalized.models,
     defaultModel: normalized.defaultModel,
+    modelConfigs: normalized.modelConfigs,
     enabled: normalized.enabled !== false,
   };
 }
@@ -228,7 +230,42 @@ function normalizeStoredProvider(cfg: ProviderConfig): ProviderConfig {
     enabled: cfg.enabled !== false,
     apiStyle: cfg.apiStyle ?? defaultApiStyle(cfg.kind),
     rateLimitPerMin: normalizeRateLimit(cfg.rateLimitPerMin),
+    modelConfigs: normalizeModelConfigs(cfg.modelConfigs),
   };
+}
+
+/** Keep only recognised per-model fields, clamped to sane ranges. */
+export function normalizeModelConfigs(
+  configs: ProviderConfig["modelConfigs"],
+): ProviderConfig["modelConfigs"] {
+  if (!configs || typeof configs !== "object") return undefined;
+  const out: NonNullable<ProviderConfig["modelConfigs"]> = {};
+  for (const [model, config] of Object.entries(configs)) {
+    if (!model || !config || typeof config !== "object") continue;
+    const entry: NonNullable<ProviderConfig["modelConfigs"]>[string] = {};
+    if (typeof config.contextWindow === "number" && config.contextWindow > 0) {
+      entry.contextWindow = Math.min(Math.round(config.contextWindow), 10_000_000);
+    }
+    if (typeof config.maxOutputTokens === "number" && config.maxOutputTokens > 0) {
+      entry.maxOutputTokens = Math.min(Math.round(config.maxOutputTokens), 500_000);
+    }
+    if (typeof config.temperature === "number" && Number.isFinite(config.temperature)) {
+      entry.temperature = Math.max(0, Math.min(config.temperature, 2));
+    }
+    if (config.reasoning !== undefined) entry.reasoning = Boolean(config.reasoning);
+    if (Array.isArray(config.supportedThinkingLevels)) {
+      entry.supportedThinkingLevels = config.supportedThinkingLevels.filter((l) => THINKING_LEVELS.includes(l));
+    }
+    if (config.defaultThinkingLevel !== undefined) {
+      entry.defaultThinkingLevel =
+        config.defaultThinkingLevel && THINKING_LEVELS.includes(config.defaultThinkingLevel)
+          ? config.defaultThinkingLevel
+          : null;
+    }
+    if (config.thinkingLevelMap) entry.thinkingLevelMap = config.thinkingLevelMap;
+    if (Object.keys(entry).length > 0) out[model] = entry;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 /**
